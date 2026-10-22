@@ -1,7 +1,7 @@
 {
   "name": "@cmwl1231/dsh-notify",
-  "version": "1.0.0",
-  "description": "Windows toast notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness",
+  "version": "1.1.0",
+  "description": "Windows toast notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness, with a settings page inside DSH",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -25,22 +25,38 @@
   ],
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
+    "./schema": "./schema.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
+    "client.js",
+    "schema.js",
+    "settings-store.js",
     "notify.ps1",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg"
   ],
   "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
   }
 }

@@ -18,7 +18,9 @@ param(
   [string]$Title = 'DeepSeek-Harness',
   [string]$Body = '',
   [string]$Activate = 'dsh://notify',
-  [string]$Image = ''
+  [string]$Image = '',
+  [ValidateSet('default', 'silent')]
+  [string]$Sound = 'default'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -143,6 +145,12 @@ $escape = { param($text) [System.Security.SecurityElement]::Escape([string]$text
 # read it; the AppUserModelId entry above is what actually names the toast.
 $image = if ($Image) { "<image placement=`"appLogoOverride`" src=`"$(& $escape $Image)`"/>" } else { '' }
 $header = if ($icon) { "<image id=`"1`" src=`"$(& $escape $icon)`"/>" } else { '' }
+# A toast with one text line and no body reads better than one with a blank
+# second line, which is what a title-only notification would otherwise show.
+$body = if ($Body) { "<text>$(& $escape $Body)</text>" } else { '' }
+# `silent` drops the audio element entirely: WinRT plays the default sound when
+# no <audio> is present, so the silent form must be explicit.
+$audio = if ($Sound -eq 'silent') { '<audio silent="true" />' } else { '<audio src="ms-winsoundevent:Notification.Default" />' }
 
 $xml = @"
 <toast activationType="protocol" launch="$(& $escape $Activate)">
@@ -150,14 +158,14 @@ $xml = @"
     <binding template="ToastGeneric" displayName="$(& $escape $displayName)">
       $header
       <text>$(& $escape $Title)</text>
-      <text>$(& $escape $Body)</text>
+      $body
       $image
     </binding>
   </visual>
   <actions>
     <action content="打开 DeepSeek-Harness" activationType="protocol" arguments="$(& $escape $Activate)" />
   </actions>
-  <audio src="ms-winsoundevent:Notification.Default" />
+  $audio
 </toast>
 "@
 

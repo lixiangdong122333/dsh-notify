@@ -42,19 +42,33 @@ Quit DSH before running the command, and start it again afterwards. A newly adde
 
 ## Configure
 
-Settings live in the `dsh-notify` row of your profile's `cordis.patch.yml`. Every key is optional; the defaults below are what an install without any overrides uses.
+Open **Settings → Plugins → this plugin**. The form edits the `dsh-notify` row of your profile's `cordis.patch.yml` and applies each change immediately, with a **Send a test notification** button to confirm the whole chain works.
+
+Editing that row by hand works just as well — both write the same block. Every key is optional; the defaults below are what an install without overrides uses.
 
 ```yaml
 - id: dsh-notify
   config:
-    onTurnEnd: true          # toast when a turn ends
-    skipWhenFocused: true    # stay quiet while a DSH tab is in the foreground
-    notifyQuestions: true    # toast for an unanswered question
-    questionDelayMs: 6000    # how long a question waits before the toast
-    notifyPlanReviews: false # announce plan reviews too
-    minTurnMs: 0             # ignore turns shorter than this
-    cwd: null                # only sessions under this directory; null = all
+    onTurnEnd: true              # toast when a turn ends
+    notifyEndKinds:              # which endings are worth a toast
+      - completed
+      - error
+      - max-tokens
+    minTurnMs: 0                 # ignore turns shorter than this (ms)
+    notifyQuestions: true        # toast for an unanswered question
+    questionDelayMs: 6000        # how long a question waits before the toast
+    notifyPlanReviews: false     # announce plan reviews too
+    skipWhenFocused: true        # stay quiet while a DSH tab is in the foreground
+    skipWhenOthersRunning: true  # stay quiet while another session still works
+    bodySource: answer           # answer | prompt | none
+    bodyLength: 150              # characters of body text
+    sound: default               # default | silent | important
+    titleCompleted: "DSH · 任务完成"
+    titleEnded: "DSH · 任务已结束"
+    titleQuestion: "DSH · 需要你确认"
 ```
+
+`forked` and `interrupted` are handovers inside the app rather than a finished task, so they are not offered as endpoints. `sound: important` keeps only the question toast audible.
 
 ## How it works
 
@@ -74,7 +88,7 @@ The plugin is a Cordis plugin: it exports `apply(ctx)` and registers listeners o
 ## Development
 
 ```bash
-# plugin logic, against a fake context and session log — no DSH needed
+# plugin logic and the settings store, against a fake context — no DSH needed
 node test-plugin.mjs
 
 # toast payload and encoding checks (Windows, sends one real toast)

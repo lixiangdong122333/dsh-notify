@@ -12,35 +12,28 @@
 // its primary window.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Config, normalize } from './schema.js';
+import { findPatch, writeConfig } from './settings-store.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'notify.ps1');
 const PROTOCOL = 'dsh://notify';
 const MAX_TITLE = 60;
-const MAX_BODY = 150;
-const TITLE = 'DSH · 任务完成';
-const QUESTION_TITLE = 'DSH · 需要你确认';
 const FOCUS_STALE_MS = 15000;
 const FOCUS_PATH = '/dsh-notify-focus.js';
 
 export const name = 'dsh-notify';
 export const inject = ['agents', 'webServer'];
+export { Config };
 
 export function apply(ctx, config = {}) {
   const logger = ctx.logger;
   if (process.platform !== 'win32') return;
 
-  const options = {
-    onTurnEnd: config.onTurnEnd !== false,
-    notifyQuestions: config.notifyQuestions !== false,
-    notifyPlanReviews: config.notifyPlanReviews === true,
-    questionDelayMs: clampi(config.questionDelayMs, 6000, 0, 600000),
-    skipWhenFocused: config.skipWhenFocused !== false,
-    minTurnMs: clampi(config.minTurnMs, 0, 0, 3600000),
-    cwd: typeof config.cwd === 'string' && config.cwd.length > 0 ? config.cwd : null,
-  };
+  const options = normalize(config);
+  const clipBody = text => clip(text, options.bodyLength);
 
   const shortcut = findShortcut();
   if (shortcut === undefined) {
@@ -115,15 +108,20 @@ export function apply(ctx, config = {}) {
 
   // ---- notifications -------------------------------------------------------
 
-  function notify(title, body) {
-    const child = spawn('powershell.exe', [
+  function notify(title, body, sound = soundFor('turn')) {
+    const text = clipBody(body);
+    // Windows PowerShell drops an empty `-File` argument, so an empty body is
+    // sent as "no -Body at all" rather than as a zero-length value: the script
+    // defaults it to '' and renders a title-only toast.
+    const args = [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', SCRIPT,
       '-Mode', 'send',
       '-Title', clip(title, MAX_TITLE),
-      '-Body', clip(body, MAX_BODY),
-      '-Activate', PROTOCOL,
-    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    ];
+    if (text) args.push('-Body', text);
+    args.push('-Sound', sound, '-Activate', PROTOCOL);
+    const child = spawn('powershell.exe', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout?.on('data', (chunk) => { output += chunk; });
     child.stderr?.on('data', (chunk) => { output += chunk; });
@@ -133,6 +131,17 @@ export function apply(ctx, config = {}) {
       else warn('toast-failed', { code, output: output.trim().slice(0, 400) });
     });
     child.unref?.();
+  }
+
+  /**
+   * Resolve the sound flag for one toast: 'default', 'silent', or 'important'.
+   * `important` silences ordinary turn endings and keeps only the question
+   * toast audible, which is the usual way to stay reachable without noise.
+   */
+  function soundFor(kind) {
+    if (options.sound === 'silent') return 'silent';
+    if (options.sound === 'important') return kind === 'question' ? 'default' : 'silent';
+    return 'default';
   }
 
   // ---- turns ---------------------------------------------------------------
@@ -183,15 +192,32 @@ export function apply(ctx, config = {}) {
     clearQuestion(session.id);
     const elapsed = turn.startedAt === undefined ? 0 : Date.now() - turn.startedAt;
     turn.startedAt = undefined;
-    if (!options.onTurnEnd || elapsed < options.minTurnMs || !inScope(session)) return;
+    if (!options.onTurnEnd || elapsed < options.minTurnMs) return;
 
     const kind = event.data?.reason?.kind ?? 'completed';
-    // A turn the user cancelled is the one end they performed themselves.
-    if (kind === 'aborted' || kind === 'forked' || kind === 'interrupted') return;
+    // Which endings are worth a toast is the user's choice. `forked` and
+    // `interrupted` are handovers inside the app, never a finished task, so
+    // they are not offered as choices at all.
+    if (!options.notifyEndKinds.has(kind)) return;
+    // `anyOtherRunning` is only consulted when the setting asks for it: a toast
+    // for a finished task while another session still works interrupts mid-flow.
     if (options.skipWhenFocused && clientFocused() && !anyOtherRunning(session.id)) return;
+    if (options.skipWhenOthersRunning && anyOtherRunning(session.id)) return;
 
-    const body = lastAnswer(session) || lastPrompt(session) || '回到 DeepSeek Harness 查看结果';
-    notify(kind === 'completed' ? TITLE : `${TITLE.split(' · ')[0]} · 任务已结束`, body);
+    notify(
+      kind === 'completed' ? options.titleCompleted : options.titleEnded,
+      turnBody(session),
+      soundFor('turn'),
+    );
+  }
+
+  /** Build the turn-end body from the configured source. */
+  function turnBody(session) {
+    if (options.bodySource === 'none') return '';
+    const text = options.bodySource === 'prompt'
+      ? lastPrompt(session) || lastAnswer(session)
+      : lastAnswer(session) || lastPrompt(session);
+    return text || '回到 DeepSeek-Harness 查看结果';
   }
 
   function anyOtherRunning(sessionId) {
@@ -220,8 +246,9 @@ export function apply(ctx, config = {}) {
     const agent = request?.agent;
     if (!options.notifyQuestions || agent === undefined) return next();
     const session = agent.session;
-    if (session === undefined || !inScope(session)) return next();
+    if (session === undefined) return next();
     if (options.skipWhenFocused && clientFocused()) return next();
+    if (options.skipWhenOthersRunning && anyOtherRunning(session.id)) return next();
     // A plan review is the one question with its own approval UI intent; it is
     // answered on screen, so a toast would arrive too late to help.
     if (!options.notifyPlanReviews && request.questions?.some(question => question?.intent?.kind === 'plan-review')) return next();
@@ -229,7 +256,7 @@ export function apply(ctx, config = {}) {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         questions.delete(session.id);
-        if (!request.signal?.aborted) notify(QUESTION_TITLE, body);
+        if (!request.signal?.aborted) notify(options.titleQuestion, body, soundFor('question'));
         resolve(next());
       }, options.questionDelayMs);
       timer.unref?.();
@@ -237,30 +264,125 @@ export function apply(ctx, config = {}) {
     });
   });
 
-  // ---- reading the transcript ---------------------------------------------
+  // ---- settings page support -----------------------------------------------
 
-  function inScope(session) {
-    if (options.cwd === null) return true;
-    const cwd = session?.header?.cwd;
-    if (typeof cwd !== 'string' || cwd.length === 0) return false;
-    const path = isAbsolute(cwd) ? cwd : join(process.cwd(), cwd);
-    const rel = relative(options.cwd, path);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-  }
+  // The settings page asks the Host for a test toast, because the Host owns the
+  // PowerShell helper, the shortcut lookup and the AUMID entry. Doing it here
+  // also means the page reports the real outcome instead of optimistically
+  // claiming success.
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-notify/test',
+    handler: (_req, res) => {
+      const reply = (status, body) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(body));
+      };
+      try {
+        const child = spawn('powershell.exe', [
+          '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+          '-File', SCRIPT,
+          '-Mode', 'send',
+          '-Title', clip(options.titleCompleted, MAX_TITLE),
+          '-Body', clipBody('这是一条测试通知，设置页已生效。'),
+          '-Sound', soundFor('turn'),
+          '-Activate', PROTOCOL,
+        ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        let output = '';
+        child.stdout?.on('data', (chunk) => { output += chunk; });
+        child.stderr?.on('data', (chunk) => { output += chunk; });
+        child.on('error', (error) => reply(500, { ok: false, detail: String(error) }));
+        child.on('exit', (code) => {
+          if (child.exitCode === null) return;
+          if (code === 0) {
+            log('test-toast', {});
+            reply(200, { ok: true });
+          } else {
+            warn('test-toast-failed', { code, output: output.trim().slice(0, 400) });
+            reply(200, { ok: false, detail: output.trim().slice(0, 300) || `exit ${code}` });
+          }
+        });
+      } catch (error) {
+        reply(500, { ok: false, detail: String(error) });
+      }
+    },
+  }), 'dsh-notify:test-route');
+
+  // Read and write this plugin's settings.
+  //
+  // The shipped settings form (`configForms`) is an internal Client service a
+  // third-party bundle cannot inject, so the page talks to these routes instead.
+  // The values live in this profile's cordis.patch.yml; a write here edits the
+  // very block a hand edit would, so there is still one source of truth, and it
+  // also updates the live options so the change applies without a restart.
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-notify/config',
+    handler: (req, res) => {
+      // Resolved per request: the profile may move or be recreated under a long
+      // running Host, and a stale path would silently stop persisting.
+      const patch = findPatch(HERE);
+      const reply = (status, body) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(body));
+      };
+
+      const current = () => ({
+        ...options,
+        notifyEndKinds: [...options.notifyEndKinds],
+      });
+
+      if (req.method === 'GET') {
+        reply(200, { ok: true, writable: patch !== null, config: current(), patch });
+        return;
+      }
+      if (req.method === 'POST') {
+        let raw = '';
+        req.on('data', chunk => { raw += chunk; });
+        req.on('end', () => {
+          try {
+            const incoming = JSON.parse(raw || '{}').config ?? {};
+            // Reuse the startup normalizer so a value written here can never be
+            // one the plugin would reject on the next boot.
+            const next = normalize(incoming);
+            Object.assign(options, next);
+            // Persist the raw shape (a list, not a Set) or a restart would read
+            // back something the schema never saw.
+            const persisted = patch === null
+              ? { error: 'this plugin is not declared in a profile patch' }
+              : writeConfig(patch, settingsSnapshot(next));
+            reply(200, { ok: true, config: current(), persisted });
+          } catch (error) {
+            reply(200, { ok: false, detail: String(error) });
+          }
+        });
+        return;
+      }
+      reply(405, { ok: false, detail: 'method not allowed' });
+    },
+  }), 'dsh-notify:config-route');
+
+  // ---- reading the transcript ---------------------------------------------
 
   return {
     /** Raise one toast exactly as the plugin does; useful for a manual check. */
     notify,
+    /** Resolved settings, so the settings page can show what is in effect. */
+    settings: settingsSnapshot,
   };
 }
 
-// ---- helpers ---------------------------------------------------------------
-
-function clampi(value, fallback, min, max) {
-  const number = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(number)));
+/**
+ * The settings in their serializable shape: the live `options` keep a Set for
+ * the ending kinds, which neither JSON nor the YAML writer should see.
+ * @param {object} options the normalized settings
+ * @returns {object} a plain object
+ */
+function settingsSnapshot(options) {
+  return { ...options, notifyEndKinds: [...options.notifyEndKinds] };
 }
+
+// ---- helpers ---------------------------------------------------------------
 
 function questionSummary(questions) {
   const first = Array.isArray(questions) ? questions[0] : undefined;
