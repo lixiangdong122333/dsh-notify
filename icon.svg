@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Task Notifications</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#1f6feb"/>
+  <path d="M32 14a11 11 0 0 0-11 11v7.5l-3.4 6.1a1.9 1.9 0 0 0 1.6 2.9h25.6a1.9 1.9 0 0 0 1.6-2.9L43 32.5V25a11 11 0 0 0-11-11z" fill="#ffffff"/>
+  <path d="M27.4 43.5h9.2a4.6 4.6 0 0 1-9.2 0z" fill="#ffffff"/>
+  <circle cx="45" cy="19" r="8.5" fill="#22c55e" stroke="#1f6feb" stroke-width="2.5"/>
+</svg>

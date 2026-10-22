@@ -1,0 +1,14 @@
+# Keep bytes stable across platforms.
+#
+# notify.ps1 carries a UTF-8 BOM and Chinese literals in the action label.
+# Windows PowerShell 5.1 decodes a .ps1 file in the system code page unless a
+# BOM says otherwise, so the file must be checked out exactly as committed.
+# `-text` disables every end-of-line conversion for it.
+*.ps1 -text
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.svg text eol=lf
+LICENSE text eol=lf

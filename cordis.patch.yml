@@ -1,0 +1,25 @@
+# Registers the "task finished / needs you" Windows notification for DSH.
+# Everything tunable lives in the `dsh-notify` row's `config` in the profile
+# patch, which survives DSH upgrades.
+- insert:
+    - id: dsh-notify
+      name: '@cmwl1231/dsh-notify'
+      config:
+        # Notify when a turn ends: completion, failure, or a stop other than
+        # your own cancel.
+        onTurnEnd: true
+        # Suppress notifications while a DSH tab is the foreground tab of a
+        # visible window (you saw the result live), and while another session
+        # is still running (a toast would arrive mid-task).
+        skipWhenFocused: true
+        # Notify when the agent asks you something (ask_user_question) and the
+        # request is still pending after this delay.
+        notifyQuestions: true
+        questionDelayMs: 6000
+        # Plan reviews keep their own approval UI, so they stay quiet by default.
+        notifyPlanReviews: false
+        # Ignore turns shorter than this, so trivial replies do not ring.
+        minTurnMs: 0
+        # Only notify for this workspace directory and its subdirectories; null
+        # means every session in every workspace.
+        cwd: null

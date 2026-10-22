@@ -1,0 +1,46 @@
+{
+  "name": "@cmwl1231/dsh-notify",
+  "version": "1.0.0",
+  "description": "Windows toast notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "notification",
+    "toast",
+    "windows"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lixiangdong122333/dsh-notify.git"
+  },
+  "homepage": "https://github.com/lixiangdong122333/dsh-notify#readme",
+  "bugs": {
+    "url": "https://github.com/lixiangdong122333/dsh-notify/issues"
+  },
+  "os": [
+    "win32"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "notify.ps1",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
