@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# npm credentials, which `npm login` may write here
+.npmrc
+
 # Build output
 *.tgz
 dist/
