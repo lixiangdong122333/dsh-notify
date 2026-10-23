@@ -27,9 +27,9 @@ jobs:
         # second runner catches a POSIX-only assumption in the logic itself.
         os: [windows-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -50,16 +50,16 @@ jobs:
     name: Toast delivery (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # Raises a real toast. It is a separate job because it checks the delivery
-      # path (WinRT through PowerShell), not the plugin logic, and a headless
-      # runner may have no interactive desktop to show it on. That is why this
-      # job reports rather than gates: see the note in test-toast.ps1.
+      # Raises a real toast and reads the payload back where the Windows build
+      # exposes notification history. A separate job because it checks the
+      # delivery path (WinRT through PowerShell), not the plugin logic. It now
+      # gates: the suite skips only the send, and only when DeepSeek-Harness is
+      # not installed here, so a failure here is a real one.
       - name: Toast payload and encoding
         shell: powershell
         run: ./test-toast.ps1
-        continue-on-error: true
 
   stage:
     name: Stage release on npm
@@ -68,9 +68,9 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -102,7 +102,7 @@ jobs:
           echo "$pkg is not published yet"
 
       - name: Install dependencies
-        run: npm install --no-save --ignore-scripts @deepseek-ai/schemastery@~3.18.5
+        run: npm install --no-save --ignore-scripts --force @deepseek-ai/schemastery@~3.18.5
 
       # npm 11 (the version bundled with Node 22) has no `stage` command; npm 12
       # is required for staged publishing.
