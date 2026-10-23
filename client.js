@@ -87,91 +87,145 @@ window.__ModuleLoader__.load({
     }
 
     // ---- styles --------------------------------------------------------------
-    // Token-only: a renamed token degrades appearance, never breaks layout.
+    // Layout only. Every colour lives in STYLESHEET below.
+    //
+    // React assigns `style` object entries one property at a time, and a
+    // `var(--token, fallback)` value written that way did not survive in this
+    // bundle: the declaration was dropped, which is how the switch ended up with
+    // no track colour and rendered as a white pill. A real stylesheet is parsed
+    // as CSS, so the tokens and their fallbacks both work there.
 
     const S = {
       wrap: { display: 'flex', flexDirection: 'column', gap: '18px', padding: '4px 0' },
       row: {
         display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
         gap: '16px', padding: '12px 0',
-        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18))',
       },
       rowText: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: 1 },
-      label: { fontSize: '13px', fontWeight: 500, color: 'var(--dsw-alias-label-primary, inherit)' },
-      hint: { fontSize: '12px', lineHeight: '1.5', color: 'var(--dsw-alias-label-secondary, #888)' },
+      label: { fontSize: '13px', fontWeight: 500 },
+      hint: { fontSize: '12px', lineHeight: '1.5' },
       control: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '8px' },
       input: {
         width: '128px', padding: '5px 8px', fontSize: '13px', textAlign: 'right',
-        color: 'var(--dsw-alias-label-primary, inherit)',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px', outline: 'none',
       },
       textInput: {
         width: '220px', padding: '5px 8px', fontSize: '13px',
-        color: 'var(--dsw-alias-label-primary, inherit)',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px', outline: 'none',
       },
       select: {
         padding: '5px 8px', fontSize: '13px', minWidth: '150px',
-        color: 'var(--dsw-alias-label-primary, inherit)',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px',
         // The drop-down list is a separate popup the page never draws, so it does
         // not inherit the closed control's colours: without this the options fall
         // back to the platform's light default and wash out in dark mode.
         colorScheme: 'light dark',
       },
-      option: {
-        color: 'var(--dsw-alias-label-primary, inherit)',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
-      },
-      switch: (on) => ({
+      switch: {
         position: 'relative', width: '38px', height: '22px', borderRadius: '11px',
         border: 'none', padding: 0, cursor: 'pointer', flex: '0 0 auto',
-        background: on
-          ? 'var(--dsw-alias-brand-primary, #247bbf)'
-          : 'var(--dsw-alias-border-l2, rgba(128,128,128,0.45))',
-        transition: 'background 120ms ease',
-      }),
+      },
       knob: (on) => ({
         position: 'absolute', top: '3px', left: on ? '19px' : '3px',
         width: '16px', height: '16px', borderRadius: '50%',
-        background: '#fff', transition: 'left 120ms ease',
+        transition: 'left 120ms ease, background 120ms ease',
       }),
       sectionTitle: {
         fontSize: '12px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
-        color: 'var(--dsw-alias-label-secondary, #888)', margin: 0,
+        margin: 0,
       },
       button: {
         padding: '6px 14px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px',
-        color: 'var(--dsw-alias-label-primary, inherit)',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
-        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
       },
       status: { fontSize: '12px', lineHeight: '1.6', margin: 0, whiteSpace: 'pre-wrap' },
       note: {
         fontSize: '12px', lineHeight: '1.6', padding: '10px 12px', borderRadius: '6px',
-        color: 'var(--dsw-alias-label-secondary, #888)',
-        background: 'var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.06))',
       },
     };
 
+    // Every colour the page uses, scoped under `.dsh-notify` so nothing leaks into
+    // DSH's own settings controls.
+    const STYLESHEET = `
+.dsh-notify { color: var(--dsw-alias-label-primary, #e8e8e8); }
+.dsh-notify-row { border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18)); }
+.dsh-notify-row:last-child { border-bottom: none; }
+.dsh-notify-label { color: var(--dsw-alias-label-primary, #e8e8e8); }
+.dsh-notify-hint { color: var(--dsw-alias-label-secondary, #9a9a9a); }
+.dsh-notify-section-title { color: var(--dsw-alias-label-secondary, #9a9a9a); }
+
+.dsh-notify-input,
+.dsh-notify-text,
+.dsh-notify-select {
+  color: var(--dsw-alias-label-primary, #e8e8e8);
+  background: var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.12));
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3));
+}
+.dsh-notify-input:focus,
+.dsh-notify-text:focus,
+.dsh-notify-select:focus { border-color: var(--dsw-alias-brand-primary, #3b82f6); }
+
+.dsh-notify-select { color-scheme: light dark; }
+.dsh-notify-select option {
+  color: var(--dsw-alias-label-primary, #e8e8e8);
+  background: var(--dsw-alias-bg-layer-1, #2b2b2b);
+}
+
+.dsh-notify-button {
+  color: var(--dsw-alias-label-primary, #e8e8e8);
+  background: var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.12));
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3));
+}
+.dsh-notify-button:hover { background: var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.2)); }
+
+.dsh-notify-note {
+  color: var(--dsw-alias-label-secondary, #9a9a9a);
+  background: var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.08));
+}
+
+/* Chip toggles for the multi-select field. */
+.dsh-notify-chip {
+  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 999px;
+  color: var(--dsw-alias-label-secondary, #9a9a9a);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35));
+}
+.dsh-notify-chip[data-on="true"] {
+  color: var(--dsw-alias-label-primary, #e8e8e8);
+  border-color: var(--dsw-alias-brand-primary, #3b82f6);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #3b82f6) 18%, transparent);
+  font-weight: 500;
+}
+
+/* The switch: a track that fills in when on, and a knob that slides across. */
+.dsh-notify-switch { background: rgba(128, 128, 128, 0.38); }
+.dsh-notify-switch:hover { background: rgba(128, 128, 128, 0.5); }
+.dsh-notify-switch[data-on="true"] { background: var(--dsw-alias-brand-primary, #3b82f6); }
+.dsh-notify-switch .dsh-notify-knob { background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+.dsh-notify-switch:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary, #3b82f6);
+  outline-offset: 2px;
+}
+`;
+
     function Switch({ checked, onChange, label }) {
+      // `data-on` drives every colour from the stylesheet; see S.switch above.
       return h('button', {
-        type: 'button', role: 'switch', 'aria-checked': checked, 'aria-label': label,
-        style: S.switch(checked), onClick: () => onChange(!checked),
-      }, h('span', { style: S.knob(checked) }));
+        type: 'button',
+        role: 'switch',
+        'aria-checked': checked,
+        'aria-label': label,
+        className: 'dsh-notify-switch',
+        'data-on': checked ? 'true' : 'false',
+        style: S.switch,
+        onClick: () => onChange(!checked),
+      }, h('span', { className: 'dsh-notify-knob', style: S.knob(checked) }));
     }
 
     function Row({ label, hint, children }) {
-      return h('div', { style: S.row },
+      return h('div', { className: 'dsh-notify-row', style: S.row },
         h('div', { style: S.rowText },
-          h('span', { style: S.label }, label),
-          hint ? h('span', { style: S.hint }, hint) : null,
+          h('span', { className: 'dsh-notify-label', style: S.label }, label),
+          hint ? h('span', { className: 'dsh-notify-hint', style: S.hint }, hint) : null,
         ),
         h('div', { style: S.control }, children),
       );
@@ -190,7 +244,7 @@ window.__ModuleLoader__.load({
       if (spec.kind === 'number') {
         return h(Row, { label, hint },
           h('input', {
-            type: 'number', style: S.input, value: value ?? 0,
+            type: 'number', className: 'dsh-notify-input', style: S.input, value: value ?? 0,
             min: spec.min, max: spec.max, step: spec.step, 'aria-label': label,
             onChange: event => {
               const next = Number(event.target.value);
@@ -202,7 +256,8 @@ window.__ModuleLoader__.load({
       if (spec.kind === 'text') {
         return h(Row, { label, hint },
           h('input', {
-            type: 'text', style: S.textInput, value: value ?? '', 'aria-label': label,
+            type: 'text', className: 'dsh-notify-text', style: S.textInput,
+            value: value ?? '', 'aria-label': label,
             onChange: event => onChange(event.target.value),
           }),
         );
@@ -210,11 +265,12 @@ window.__ModuleLoader__.load({
       if (spec.kind === 'select') {
         return h(Row, { label, hint },
           h('select', {
-            style: S.select, value: value ?? spec.choices[0].value, 'aria-label': label,
+            className: 'dsh-notify-select', style: S.select,
+            value: value ?? spec.choices[0].value, 'aria-label': label,
             onChange: event => onChange(event.target.value),
           }, spec.choices.map(choice =>
             h('option', {
-              key: choice.value, value: choice.value, style: S.option,
+              key: choice.value, value: choice.value,
             }, pick(choice.label, lang)),
           )),
         );
@@ -228,16 +284,11 @@ window.__ModuleLoader__.load({
               return h('button', {
                 key: choice.value, type: 'button',
                 'aria-pressed': on,
+                className: 'dsh-notify-chip',
+                'data-on': on ? 'true' : 'false',
                 onClick: () => onChange(on
                   ? chosen.filter(item => item !== choice.value)
                   : [...chosen, choice.value]),
-                style: {
-                  ...S.button,
-                  padding: '4px 10px',
-                  borderColor: on ? 'var(--dsw-alias-brand-primary, #247bbf)' : undefined,
-                  color: on ? 'var(--dsw-alias-brand-primary, #247bbf)' : undefined,
-                  fontWeight: on ? 600 : 400,
-                },
               }, pick(choice.label, lang));
             }),
           ),
@@ -323,14 +374,14 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'dsh-notify', style: S.wrap },
         readOnly
-          ? h('p', { style: S.note }, pick(
+          ? h('p', { className: 'dsh-notify-note', style: S.note }, pick(
             ['Settings are read-only in this profile.', '当前 profile 的设置是只读的。'],
             lang,
           ))
           : null,
 
         GROUP_TITLES.map(([groupLabel, names], index) => h('div', { key: index, style: S.wrap },
-          h('h3', { style: S.sectionTitle }, pick(groupLabel, lang)),
+          h('h3', { className: 'dsh-notify-section-title', style: S.sectionTitle }, pick(groupLabel, lang)),
           names.map(name => h(Field, {
             key: name,
             name,
@@ -343,15 +394,15 @@ window.__ModuleLoader__.load({
 
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '4px' } },
           h('button', {
-            type: 'button', style: S.button, disabled: testing,
+            type: 'button', className: 'dsh-notify-button', style: S.button, disabled: testing,
             onClick: onTest, 'aria-busy': testing,
           }, testing
             ? pick(['Sending…', '正在发送…'], lang)
             : pick(['Send a test notification', '发送测试通知'], lang)),
-          testResult ? h('span', { style: { ...S.status, color: 'var(--dsw-alias-label-secondary, #888)' } }, testResult) : null,
+          testResult ? h('span', { style: S.status }, testResult) : null,
         ),
 
-        h('p', { style: S.note }, pick(
+        h('p', { className: 'dsh-notify-note', style: S.note }, pick(
           ['These settings are stored in this profile\'s cordis.patch.yml and survive DSH upgrades.',
             '这些设置保存在本 profile 的 cordis.patch.yml 里，升级 DSH 不会丢失。'],
           lang,
@@ -367,22 +418,19 @@ window.__ModuleLoader__.load({
         // no consumers would just be a second place to keep the same text.
         const lang = String(ctx.locale.getLocale?.().active ?? 'en').startsWith('zh') ? 'zh' : 'en';
 
-        // A <select>'s drop-down list is a separate popup the page does not draw,
-        // so inline styles on the options are not reliably honoured and in dark
-        // mode the list rendered on the platform's light default, washing out its
-        // text. A real stylesheet rule plus `color-scheme` is what the popup
-        // consults. `styles` is a Client builtin, reachable either as a builtin
-        // the page injects or through the context; when neither works the inline
-        // colours in S.select/S.option are still applied.
+        // Every colour the page uses is a stylesheet rule rather than an inline
+        // style. React assigns `style` entries one property at a time, and a
+        // `var(--token, fallback)` value written that way did not survive in this
+        // bundle: the declaration was dropped, which left the switch track with no
+        // colour at all so it rendered as a white pill. A parsed stylesheet has no
+        // such problem, and it is also the only way to reach a <select>'s popup
+        // list, which the page never draws.
+        //
+        // `styles` is a Client builtin. Without it the page still lays out, just
+        // without its palette.
         const styles = ctx.get?.('styles') ?? builtins?.styles;
         if (styles && typeof styles.insert === 'function') {
-          styles.insert(`
-.dsh-notify select { color-scheme: light dark; }
-.dsh-notify select option {
-  color: var(--dsw-alias-label-primary, #e6e6e6);
-  background: var(--dsw-alias-bg-layer-1, #2b2b2b);
-}
-`);
+          styles.insert(STYLESHEET);
         }
 
         // The test toast is raised by the Host, which owns the PowerShell helper

@@ -99,6 +99,26 @@ check(
   css.slice(0, 120),
 );
 check('the stylesheet colours the options', css.includes('option'));
+
+// The switch track must be coloured from the stylesheet: inline `var()` values
+// were dropped in this bundle, which is what left the switch as a white pill.
+check(
+  'the stylesheet gives the switch a track colour when off',
+  /\.dsh-notify-switch\s*\{[^}]*background/.test(css),
+);
+check(
+  'the stylesheet fills the track when on',
+  /\.dsh-notify-switch\[data-on="true"\]\s*\{[^}]*background/.test(css),
+);
+check(
+  'the stylesheet colours the knob',
+  /\.dsh-notify-knob\s*\{[^}]*background/.test(css),
+);
+// Every control the page draws needs a rule, or it falls back to the platform
+// default the same way the switch did.
+for (const selector of ['.dsh-notify-input', '.dsh-notify-text', '.dsh-notify-select', '.dsh-notify-button', '.dsh-notify-chip', '.dsh-notify-note']) {
+  check(`the stylesheet covers ${selector}`, css.includes(selector));
+}
 check(
   'the Plugins page seat is registered',
   registrations.some(entry => entry.registration.name === 'plugins.bundle.config'),
@@ -156,6 +176,20 @@ check(
   String(englishSection?.registration.label?.()),
 );
 check('the English run also registers both seats', englishSeats.length === 2, englishSeats.join(', '));
+
+// A guard against the regression that caused the white switch: `style` objects
+// in this file must not carry `var()`, because React writing them property by
+// property dropped the declaration. Colours belong in STYLESHEET.
+const styleBlocks = source.slice(source.indexOf('const S = {'), source.indexOf('const STYLESHEET'));
+check(
+  'no inline style carries a var() value',
+  !/var\(--dsw/.test(styleBlocks),
+  (styleBlocks.match(/.*var\(--dsw.*/g) ?? []).join(' | ').slice(0, 160),
+);
+check(
+  'no component passes a var() inline',
+  !/style:\s*\{\s*\.\.\.[^}]*var\(--dsw/.test(source),
+);
 
 // --- report ------------------------------------------------------------------
 const failed = results.filter(entry => !entry.ok);
