@@ -41,24 +41,31 @@ function block(config, indent) {
 }
 
 /**
- * Find the patch file that declares this plugin.
+ * Find the profile patch that declares this plugin.
+ *
+ * The plugin ships its own `cordis.patch.yml` (the defaults an install starts
+ * from), so a plain "first file that mentions us" search would pick the wrong
+ * one and write settings the Host never reads. The profile is therefore derived
+ * from where the package is installed — `<profile>/node_modules/<name>` — and
+ * `DSH_PROFILE_DIR` only ever narrows that down.
  * @param {string} here the plugin's own directory
  * @returns {string | null} the profile patch path, or null when nothing declares us
  */
 export function findPatch(here) {
-  const profileDir = process.env.DSH_PROFILE_DIR;
+  // `<profile>/node_modules/@scope/name` -> `<profile>`: the scope adds a level,
+  // so it is four steps up, not three.
+  const fromInstall = join(here, '..', '..', '..');
+  const envDir = process.env.DSH_PROFILE_DIR;
+
   const candidates = [
-    profileDir === undefined ? undefined : join(profileDir, 'cordis.patch.yml'),
-    join(here, '..', '..', 'cordis.patch.yml'),
-    join(here, '..', 'cordis.patch.yml'),
-    join(here, 'cordis.patch.yml'),
+    envDir === undefined ? undefined : join(envDir, 'cordis.patch.yml'),
+    join(fromInstall, 'cordis.patch.yml'),
   ].filter(path => typeof path === 'string');
 
   for (const path of candidates) {
     try {
       const text = readFileSync(path, 'utf8');
-      const row = locateRow(text);
-      if (row !== null) return path;
+      if (locateRow(text) !== null) return path;
     } catch {
       // Missing or unreadable candidate: try the next one.
     }

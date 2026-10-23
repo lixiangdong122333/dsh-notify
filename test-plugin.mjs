@@ -22,8 +22,8 @@ syncBuiltinESMExports();
 
 const { apply, inject, Config } = await import('./index.js');
 const { normalize } = await import('./schema.js');
-const { writeConfig } = await import('./settings-store.js');
-const { readFileSync, writeFileSync, unlinkSync } = await import('node:fs');
+const { writeConfig, findPatch } = await import('./settings-store.js');
+const { readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } = await import('node:fs');
 const { join } = await import('node:path');
 const { tmpdir } = await import('node:os');
 
@@ -340,6 +340,23 @@ if (configRoute) {
   // unrelated to the setting under test.
   const beforeFocusWrite = await call('POST', { config: { ...written.config, skipWhenFocused: false } });
   check('focus suppression can be turned off through the same route', beforeFocusWrite.config?.skipWhenFocused === false);
+
+  // The plugin ships its own cordis.patch.yml, so resolving the profile patch
+  // must not simply pick "the first file that names us": that would write
+  // settings the Host never reads. Derive it from the install location instead.
+  const fakeProfile = join(tmpdir(), `dsh-notify-profile-${process.pid}`);
+  const fakePkg = join(fakeProfile, 'node_modules', '@scope', 'name');
+  mkdirSync(fakePkg, { recursive: true });
+  writeFileSync(join(fakeProfile, 'cordis.patch.yml'), '- id: dsh-notify\n  name: "@scope/name"\n', 'utf8');
+  // The package's own copy also names us; it must lose to the profile's.
+  writeFileSync(join(fakePkg, 'cordis.patch.yml'), '- id: dsh-notify\n  name: "@scope/name"\n', 'utf8');
+  const savedEnv = process.env.DSH_PROFILE_DIR;
+  delete process.env.DSH_PROFILE_DIR;
+  check('findPatch resolves the profile patch, not the package copy',
+    findPatch(fakePkg) === join(fakeProfile, 'cordis.patch.yml'),
+    String(findPatch(fakePkg)));
+  if (savedEnv !== undefined) process.env.DSH_PROFILE_DIR = savedEnv;
+  rmSync(fakeProfile, { recursive: true, force: true });
 
   // Persistence is a different concern from the live update: test the store on a
   // throwaway patch file so the real profile is never touched by this suite.
