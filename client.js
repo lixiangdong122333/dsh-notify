@@ -1,9 +1,14 @@
-// Settings page for dsh-notify.
+// Settings for dsh-notify, rendered in two seats from one body:
 //
-// The page renders inside DSH's own Plugins settings area (`plugins.bundle.config`,
-// keyed by the bundle's package name) and edits the very same `cordis.patch.yml`
-// row the Host reads: `ctx.configForms.get(<row id>)` is the shipped write path,
-// so a change here and a hand-edited patch are the same data.
+//   * `settings.section` — a first-level page in the settings panel, labelled
+//     Notifications, placed last after Agent presets; and
+//   * `plugins.bundle.config` — the bundle's own block on its Plugins page,
+//     keyed by the package name, which is where an installed bundle is listed.
+//
+// Both edit the `cordis.patch.yml` row the Host reads, through this plugin's own
+// `/dsh-notify/config` route. The shipped `ctx.configForms` write path is not
+// reachable from a third-party bundle: it is not in the injectable Client
+// service catalog, so the Host route is the one that works.
 //
 // React comes from the browser module table; loading a Harness Client package as
 // a module is not allowed, so every control below is written locally and styled
@@ -363,10 +368,9 @@ window.__ModuleLoader__.load({
           return body;
         }
 
-        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-          name: 'plugins.bundle.config',
-          key: '@cmwl1231/dsh-notify',
-        }, () => {
+        // Both seats below render the same document and the same test button, so
+        // the button's state lives in one factory instead of being written twice.
+        function body() {
           const [testing, setTesting] = React.useState(false);
           const [result, setResult] = React.useState(null);
           const onTest = React.useCallback(async () => {
@@ -382,7 +386,28 @@ window.__ModuleLoader__.load({
             }
           }, []);
           return h(Settings, { lang, onTest, testing, testResult: result });
-        }));
+        }
+
+        // Seat one: the bundle's own page, reached from its row on the Plugins
+        // page. It stays because that is where someone who installed a plugin
+        // looks first, and because the row is the only place the bundle is even
+        // listed.
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key: '@cmwl1231/dsh-notify',
+        }, body));
+
+        // Seat two: a first-level page in the settings panel itself, beside
+        // General, Models, and the rest. Notifications are something people
+        // reach for while using DSH rather than while administering a plugin,
+        // and four levels down inside the Plugins page was too far for that.
+        // `order: 30` places it last, after Agent presets at 20.
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: 'dsh-notify',
+          order: 30,
+          label: () => (lang === 'zh' ? '通知' : 'Notifications'),
+        }, body));
       },
     };
   },

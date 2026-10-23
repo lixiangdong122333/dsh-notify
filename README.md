@@ -42,7 +42,7 @@ Quit DSH before running the command, and start it again afterwards. A newly adde
 
 ## Configure
 
-Open **Settings → Plugins → this plugin**. The form edits the `dsh-notify` row of your profile's `cordis.patch.yml` and applies each change immediately, with a **Send a test notification** button to confirm the whole chain works.
+Open **Settings → Notifications**, the plugin's own page in the settings panel, or **Settings → Plugins → this plugin** — both render the same form. It edits the `dsh-notify` row of your profile's `cordis.patch.yml` and applies each change immediately, with a **Send a test notification** button to confirm the whole chain works.
 
 Editing that row by hand works just as well — both write the same block. Every key is optional; the defaults below are what an install without overrides uses.
 
