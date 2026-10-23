@@ -42,7 +42,8 @@
     "notify.ps1",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.zh-CN.md"
   ],
   "dsh": {
     "client": {

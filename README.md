@@ -2,6 +2,8 @@
 
 Windows desktop notifications for [DeepSeek-Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).
 
+中文文档：[README.zh-CN.md](./README.zh-CN.md)
+
 Hand a task to DSH, switch to something else, and get pulled back only when it matters: a toast tells you the task is done, or that the agent is waiting on you. Click the toast to return to the app.
 
 > Windows only. On other platforms the plugin loads and stays idle.
