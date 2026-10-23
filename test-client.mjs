@@ -100,23 +100,32 @@ check(
 );
 check('the stylesheet colours the options', css.includes('option'));
 
-// The switch track must be coloured from the stylesheet: inline `var()` values
-// were dropped in this bundle, which is what left the switch as a white pill.
+// The selected state of the switch and the chips is drawn inline with literal
+// colours: neither a var() value nor a [data-on] attribute selector took effect
+// in the shipped page, and the state has to be readable regardless. What the
+// stylesheet keeps is the shape and the focus ring.
+check('the stylesheet keeps the chip shape', css.includes('.dsh-notify-chip'));
+check('the stylesheet keeps the switch focus ring', /\.dsh-notify-switch:focus-visible/.test(css));
 check(
-  'the stylesheet gives the switch a track colour when off',
-  /\.dsh-notify-switch\s*\{[^}]*background/.test(css),
+  'the switch state is not left to an attribute selector',
+  !/\.dsh-notify-switch\[data-on=/.test(css),
 );
 check(
-  'the stylesheet fills the track when on',
-  /\.dsh-notify-switch\[data-on="true"\]\s*\{[^}]*background/.test(css),
+  'the chip state is not left to an attribute selector',
+  !/\.dsh-notify-chip\[data-on=/.test(css),
+);
+// And the component must actually carry those literal colours.
+check(
+  'the switch draws its on colour inline',
+  /background:\s*checked\s*\?\s*'#[0-9a-fA-F]{3,8}'/.test(source),
 );
 check(
-  'the stylesheet colours the knob',
-  /\.dsh-notify-knob\s*\{[^}]*background/.test(css),
+  'the chip draws its selected colour inline',
+  /background:\s*on\s*\?\s*'#[0-9a-fA-F]{3,8}'/.test(source),
 );
 // Every control the page draws needs a rule, or it falls back to the platform
 // default the same way the switch did.
-for (const selector of ['.dsh-notify-input', '.dsh-notify-text', '.dsh-notify-select', '.dsh-notify-button', '.dsh-notify-chip', '.dsh-notify-note']) {
+for (const selector of ['.dsh-notify-input', '.dsh-notify-text', '.dsh-notify-select', '.dsh-notify-button', '.dsh-notify-note']) {
   check(`the stylesheet covers ${selector}`, css.includes(selector));
 }
 check(

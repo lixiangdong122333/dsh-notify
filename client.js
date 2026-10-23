@@ -182,43 +182,41 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.08));
 }
 
-/* Chip toggles for the multi-select field. */
+/* Chip toggles for the multi-select field. The selected/unselected colours are
+   inline literals in the component; only the static shape lives here. */
 .dsh-notify-chip {
-  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 999px;
-  color: var(--dsw-alias-label-secondary, #9a9a9a);
-  background: transparent;
-  border: 1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35));
-}
-.dsh-notify-chip[data-on="true"] {
-  color: var(--dsw-alias-label-primary, #e8e8e8);
-  border-color: var(--dsw-alias-brand-primary, #3b82f6);
-  background: color-mix(in srgb, var(--dsw-alias-brand-primary, #3b82f6) 18%, transparent);
-  font-weight: 500;
+  padding: 5px 12px; font-size: 12px; cursor: pointer; border-radius: 999px;
 }
 
-/* The switch: a track that fills in when on, and a knob that slides across. */
-.dsh-notify-switch { background: rgba(128, 128, 128, 0.38); }
-.dsh-notify-switch:hover { background: rgba(128, 128, 128, 0.5); }
-.dsh-notify-switch[data-on="true"] { background: var(--dsw-alias-brand-primary, #3b82f6); }
-.dsh-notify-switch .dsh-notify-knob { background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+/* The switch. Track colour, knob colour, and knob position are inline literals in
+   the component, because neither var() nor [data-on] attribute selectors took
+   effect here. Only the static shape and focus ring live in this sheet. */
+.dsh-notify-switch .dsh-notify-knob { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 .dsh-notify-switch:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary, #3b82f6);
+  outline: 2px solid #3b82f6;
   outline-offset: 2px;
 }
 `;
 
     function Switch({ checked, onChange, label }) {
-      // `data-on` drives every colour from the stylesheet; see S.switch above.
+      // The on/off colour is an inline literal, not a var() and not an attribute
+      // selector. Both of those failed to take effect here, and the switch has to
+      // be readable whatever the stylesheet does.
       return h('button', {
         type: 'button',
         role: 'switch',
         'aria-checked': checked,
         'aria-label': label,
         className: 'dsh-notify-switch',
-        'data-on': checked ? 'true' : 'false',
-        style: S.switch,
+        style: {
+          ...S.switch,
+          background: checked ? '#3b82f6' : 'rgba(128,128,128,0.38)',
+        },
         onClick: () => onChange(!checked),
-      }, h('span', { className: 'dsh-notify-knob', style: S.knob(checked) }));
+      }, h('span', {
+        className: 'dsh-notify-knob',
+        style: { ...S.knob(checked), background: '#ffffff' },
+      }));
     }
 
     function Row({ label, hint, children }) {
@@ -285,7 +283,16 @@ window.__ModuleLoader__.load({
                 key: choice.value, type: 'button',
                 'aria-pressed': on,
                 className: 'dsh-notify-chip',
-                'data-on': on ? 'true' : 'false',
+                // Literal colours only. The attribute-selector version of this did
+                // not visibly change the chip, so selection is drawn inline.
+                style: {
+                  padding: '5px 12px', fontSize: '12px', cursor: 'pointer',
+                  borderRadius: '999px', fontWeight: on ? 600 : 400,
+                  color: on ? '#ffffff' : '#c8c8c8',
+                  background: on ? '#3b82f6' : 'rgba(128,128,128,0.22)',
+                  border: `1px solid ${on ? '#3b82f6' : 'rgba(128,128,128,0.35)'}`,
+                  transition: 'background 120ms ease, border-color 120ms ease',
+                },
                 onClick: () => onChange(on
                   ? chosen.filter(item => item !== choice.value)
                   : [...chosen, choice.value]),
@@ -401,12 +408,6 @@ window.__ModuleLoader__.load({
             : pick(['Send a test notification', '发送测试通知'], lang)),
           testResult ? h('span', { style: S.status }, testResult) : null,
         ),
-
-        h('p', { className: 'dsh-notify-note', style: S.note }, pick(
-          ['These settings are stored in this profile\'s cordis.patch.yml and survive DSH upgrades.',
-            '这些设置保存在本 profile 的 cordis.patch.yml 里，升级 DSH 不会丢失。'],
-          lang,
-        )),
       );
     }
 
@@ -419,19 +420,42 @@ window.__ModuleLoader__.load({
         const lang = String(ctx.locale.getLocale?.().active ?? 'en').startsWith('zh') ? 'zh' : 'en';
 
         // Every colour the page uses is a stylesheet rule rather than an inline
-        // style. React assigns `style` entries one property at a time, and a
-        // `var(--token, fallback)` value written that way did not survive in this
-        // bundle: the declaration was dropped, which left the switch track with no
-        // colour at all so it rendered as a white pill. A parsed stylesheet has no
-        // such problem, and it is also the only way to reach a <select>'s popup
-        // list, which the page never draws.
+        // style, because a <select>'s popup list can only be reached that way and
+        // because one place for the palette is easier to keep consistent.
         //
-        // `styles` is a Client builtin. Without it the page still lays out, just
-        // without its palette.
-        const styles = ctx.get?.('styles') ?? builtins?.styles;
-        if (styles && typeof styles.insert === 'function') {
-          styles.insert(STYLESHEET);
+        // `styles` is a Client builtin (styles.insert), but which route exposes it
+        // to a dynamic half is not something this bundle can assume: the context
+        // getter, the loader's second argument, and a plain <style> element are
+        // all tried, and the first that works is used. Colours matter less than
+        // the page working, so a failure here must not be silent.
+        const styleRoutes = [
+          ['ctx.get', () => ctx.get?.('styles')],
+          ['builtins', () => builtins?.styles],
+          ['ctx.styles', () => ctx.styles],
+        ];
+        let injected = null;
+        for (const [name, resolve] of styleRoutes) {
+          let candidate;
+          try {
+            candidate = resolve();
+          } catch {
+            continue;
+          }
+          if (candidate && typeof candidate.insert === 'function') {
+            candidate.insert(STYLESHEET);
+            injected = name;
+            break;
+          }
         }
+        if (injected === null && typeof document !== 'undefined') {
+          // Last resort: a style element owned by this run.
+          const element = document.createElement('style');
+          element.setAttribute('data-dsh-notify', '');
+          element.textContent = STYLESHEET;
+          document.head.appendChild(element);
+          injected = 'document';
+        }
+        console.debug?.(`[dsh-notify] stylesheet injected via ${injected ?? 'nothing'}`);
 
         // The test toast is raised by the Host, which owns the PowerShell helper
         // and the shortcut lookup; the page only asks for one and reports the
