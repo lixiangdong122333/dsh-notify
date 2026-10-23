@@ -30,13 +30,19 @@ export { Config };
 
 export function apply(ctx, config = {}) {
   const logger = ctx.logger;
-  if (process.platform !== 'win32') return;
+  // Two guards decide whether this plugin runs at all: the platform, and the
+  // app's Start Menu shortcut. Both are exactly right for a real install and
+  // both make the plugin a no-op on a test runner, which has neither Windows nor
+  // DeepSeek-Harness. DSH_NOTIFY_TEST_MODE exists so the suite can exercise the
+  // plugin instead of its guards; nothing sets it outside the tests.
+  const testMode = process.env.DSH_NOTIFY_TEST_MODE === '1';
+  if (process.platform !== 'win32' && !testMode) return;
 
   const options = normalize(config);
   const clipBody = text => clip(text, options.bodyLength);
 
   const shortcut = findShortcut();
-  if (shortcut === undefined) {
+  if (shortcut === undefined && !testMode) {
     logger?.warn?.('dsh-notify: the DeepSeek Harness Start Menu shortcut is missing; notifications stay off');
     return;
   }

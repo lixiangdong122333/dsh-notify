@@ -20,6 +20,20 @@ childProcess.spawn = (command, args, options) => {
 };
 syncBuiltinESMExports();
 
+// `apply` normally refuses to run unless it finds the app's Start Menu shortcut,
+// and on anything but Windows it refuses outright. Both are right for a real
+// install and both would leave every case below vacuous on a CI runner, which
+// has neither Windows nor DeepSeek-Harness. The plugin reads
+// DSH_NOTIFY_TEST_MODE for exactly this, so the suite can drive the plugin
+// instead of its guards; nothing sets it outside these tests. It is set before
+// importing so the flag is in place however the plugin decides to read it.
+const savedTestMode = process.env.DSH_NOTIFY_TEST_MODE;
+process.env.DSH_NOTIFY_TEST_MODE = '1';
+process.on('exit', () => {
+  if (savedTestMode === undefined) delete process.env.DSH_NOTIFY_TEST_MODE;
+  else process.env.DSH_NOTIFY_TEST_MODE = savedTestMode;
+});
+
 const { apply, inject, Config } = await import('./index.js');
 const { normalize } = await import('./schema.js');
 const { writeConfig, findPatch } = await import('./settings-store.js');
@@ -92,7 +106,7 @@ function check(name, condition, detail = '') {
 
 // --- turn end ---------------------------------------------------------------
 const ctx = makeContext();
-apply(ctx, { skipWhenFocused: false, questionDelayMs: 5, cwd: null });
+apply(ctx, { skipWhenFocused: false, questionDelayMs: 5 });
 
 const events = [userMessage('把 dsh-notify 插件做完'), assistantMessage('插件已经装好了，点击通知可以回到 DSH。')];
 const session = makeSession({ id: 'session-test-1', cwd: 'C:\\work', events });
