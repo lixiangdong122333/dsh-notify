@@ -15,7 +15,7 @@
 // with `--dsw-alias-*` theme tokens.
 window.__ModuleLoader__.load({
   id: '@cmwl1231/dsh-notify',
-  factory(require) {
+  factory(require, builtins) {
     const React = require('react');
     const h = React.createElement;
 
@@ -94,39 +94,47 @@ window.__ModuleLoader__.load({
       row: {
         display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
         gap: '16px', padding: '12px 0',
-        borderBottom: '1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.18))',
+        borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18))',
       },
       rowText: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: 1 },
-      label: { fontSize: '13px', fontWeight: 500, color: 'var(--dsw-alias-text-primary, inherit)' },
-      hint: { fontSize: '12px', lineHeight: '1.5', color: 'var(--dsw-alias-text-secondary, #888)' },
+      label: { fontSize: '13px', fontWeight: 500, color: 'var(--dsw-alias-label-primary, inherit)' },
+      hint: { fontSize: '12px', lineHeight: '1.5', color: 'var(--dsw-alias-label-secondary, #888)' },
       control: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '8px' },
       input: {
         width: '128px', padding: '5px 8px', fontSize: '13px', textAlign: 'right',
-        color: 'var(--dsw-alias-text-primary, inherit)',
-        background: 'var(--dsw-alias-bg-elevated, transparent)',
-        border: '1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.3))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-layer-1, transparent)',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px', outline: 'none',
       },
       textInput: {
         width: '220px', padding: '5px 8px', fontSize: '13px',
-        color: 'var(--dsw-alias-text-primary, inherit)',
-        background: 'var(--dsw-alias-bg-elevated, transparent)',
-        border: '1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.3))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-layer-1, transparent)',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px', outline: 'none',
       },
       select: {
         padding: '5px 8px', fontSize: '13px', minWidth: '150px',
-        color: 'var(--dsw-alias-text-primary, inherit)',
-        background: 'var(--dsw-alias-bg-elevated, transparent)',
-        border: '1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.3))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-layer-1, transparent)',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
         borderRadius: '6px',
+        // The drop-down list is a separate popup the page never draws, so it does
+        // not inherit the closed control's colours: without this the options fall
+        // back to the platform's light default and wash out in dark mode.
+        colorScheme: 'light dark',
+      },
+      option: {
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-layer-1, transparent)',
       },
       switch: (on) => ({
         position: 'relative', width: '38px', height: '22px', borderRadius: '11px',
         border: 'none', padding: 0, cursor: 'pointer', flex: '0 0 auto',
         background: on
-          ? 'var(--dsw-alias-accent-primary, #247bbf)'
-          : 'var(--dsw-alias-border-strong, rgba(128,128,128,0.45))',
+          ? 'var(--dsw-alias-brand-primary, #247bbf)'
+          : 'var(--dsw-alias-border-l2, rgba(128,128,128,0.45))',
         transition: 'background 120ms ease',
       }),
       knob: (on) => ({
@@ -136,19 +144,19 @@ window.__ModuleLoader__.load({
       }),
       sectionTitle: {
         fontSize: '12px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
-        color: 'var(--dsw-alias-text-secondary, #888)', margin: 0,
+        color: 'var(--dsw-alias-label-secondary, #888)', margin: 0,
       },
       button: {
         padding: '6px 14px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px',
-        color: 'var(--dsw-alias-text-primary, inherit)',
-        background: 'var(--dsw-alias-bg-elevated, transparent)',
-        border: '1px solid var(--dsw-alias-border-subtle, rgba(128,128,128,0.3))',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-layer-1, transparent)',
+        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.3))',
       },
       status: { fontSize: '12px', lineHeight: '1.6', margin: 0, whiteSpace: 'pre-wrap' },
       note: {
         fontSize: '12px', lineHeight: '1.6', padding: '10px 12px', borderRadius: '6px',
-        color: 'var(--dsw-alias-text-secondary, #888)',
-        background: 'var(--dsw-alias-bg-elevated, rgba(128,128,128,0.06))',
+        color: 'var(--dsw-alias-label-secondary, #888)',
+        background: 'var(--dsw-alias-bg-layer-1, rgba(128,128,128,0.06))',
       },
     };
 
@@ -205,7 +213,9 @@ window.__ModuleLoader__.load({
             style: S.select, value: value ?? spec.choices[0].value, 'aria-label': label,
             onChange: event => onChange(event.target.value),
           }, spec.choices.map(choice =>
-            h('option', { key: choice.value, value: choice.value }, pick(choice.label, lang)),
+            h('option', {
+              key: choice.value, value: choice.value, style: S.option,
+            }, pick(choice.label, lang)),
           )),
         );
       }
@@ -224,8 +234,8 @@ window.__ModuleLoader__.load({
                 style: {
                   ...S.button,
                   padding: '4px 10px',
-                  borderColor: on ? 'var(--dsw-alias-accent-primary, #247bbf)' : undefined,
-                  color: on ? 'var(--dsw-alias-accent-primary, #247bbf)' : undefined,
+                  borderColor: on ? 'var(--dsw-alias-brand-primary, #247bbf)' : undefined,
+                  color: on ? 'var(--dsw-alias-brand-primary, #247bbf)' : undefined,
                   fontWeight: on ? 600 : 400,
                 },
               }, pick(choice.label, lang));
@@ -311,7 +321,7 @@ window.__ModuleLoader__.load({
 
       const readOnly = state.writable === false;
 
-      return h('div', { style: S.wrap },
+      return h('div', { className: 'dsh-notify', style: S.wrap },
         readOnly
           ? h('p', { style: S.note }, pick(
             ['Settings are read-only in this profile.', '当前 profile 的设置是只读的。'],
@@ -338,7 +348,7 @@ window.__ModuleLoader__.load({
           }, testing
             ? pick(['Sending…', '正在发送…'], lang)
             : pick(['Send a test notification', '发送测试通知'], lang)),
-          testResult ? h('span', { style: { ...S.status, color: 'var(--dsw-alias-text-secondary, #888)' } }, testResult) : null,
+          testResult ? h('span', { style: { ...S.status, color: 'var(--dsw-alias-label-secondary, #888)' } }, testResult) : null,
         ),
 
         h('p', { style: S.note }, pick(
@@ -356,6 +366,24 @@ window.__ModuleLoader__.load({
         // locale, so there is no dictionary to register here: a namespace with
         // no consumers would just be a second place to keep the same text.
         const lang = String(ctx.locale.getLocale?.().active ?? 'en').startsWith('zh') ? 'zh' : 'en';
+
+        // A <select>'s drop-down list is a separate popup the page does not draw,
+        // so inline styles on the options are not reliably honoured and in dark
+        // mode the list rendered on the platform's light default, washing out its
+        // text. A real stylesheet rule plus `color-scheme` is what the popup
+        // consults. `styles` is a Client builtin, reachable either as a builtin
+        // the page injects or through the context; when neither works the inline
+        // colours in S.select/S.option are still applied.
+        const styles = ctx.get?.('styles') ?? builtins?.styles;
+        if (styles && typeof styles.insert === 'function') {
+          styles.insert(`
+.dsh-notify select { color-scheme: light dark; }
+.dsh-notify select option {
+  color: var(--dsw-alias-label-primary, #e6e6e6);
+  background: var(--dsw-alias-bg-layer-1, #2b2b2b);
+}
+`);
+        }
 
         // The test toast is raised by the Host, which owns the PowerShell helper
         // and the shortcut lookup; the page only asks for one and reports the

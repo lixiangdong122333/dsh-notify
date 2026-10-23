@@ -35,6 +35,12 @@ const React = {
   useEffect: () => {},
   useCallback: fn => fn,
 };
+// The `styles` Client builtin, which the bundle uses to reach a <select>'s
+// popup list. The factory receives it as a second argument.
+const insertedCss = [];
+const builtins = {
+  styles: { insert: css => { insertedCss.push(css); return () => {}; } },
+};
 const require = name => {
   if (name === 'react') return React;
   throw new Error(`unexpected module request: ${name}`);
@@ -47,7 +53,7 @@ run(globalThis.window);
 check('bundle registers with the module loader', factory !== undefined);
 check('bundle id is the package name', factory?.id === '@cmwl1231/dsh-notify', String(factory?.id));
 
-const bundle = factory?.loaded(require);
+const bundle = factory?.loaded(require, builtins);
 check('bundle exposes an apply', typeof bundle?.apply === 'function');
 check(
   'bundle injects slots and locale',
@@ -82,6 +88,17 @@ const ctx = {
 bundle.apply(ctx);
 
 check('both seats are injected', injectedSeats.length === 2, injectedSeats.join(', '));
+// The drop-down list is a popup the page never draws, so it has to be reached
+// with a stylesheet rule; inline styles on options are not reliably honoured.
+check('a stylesheet is inserted', insertedCss.length === 1, String(insertedCss.length));
+const css = insertedCss[0] ?? '';
+check('the stylesheet targets the select', css.includes('select'));
+check(
+  'the stylesheet gives the popup a colour scheme',
+  css.includes('color-scheme'),
+  css.slice(0, 120),
+);
+check('the stylesheet colours the options', css.includes('option'));
 check(
   'the Plugins page seat is registered',
   registrations.some(entry => entry.registration.name === 'plugins.bundle.config'),
