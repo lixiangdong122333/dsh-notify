@@ -56,12 +56,19 @@ if ($idx) {
 }
 
 # 6. npm publication status (informational gate for Plugin Center only)
+# The detail reports what was actually found, so a pass shows the served latest
+# tag and a failure explains itself, instead of a fixed line either way.
 $npmOk = $false
+$npmDetail = 'not published yet; repo is still listable via github:'
 try {
   $r = Invoke-WebRequest -Uri 'https://registry.npmjs.org/@cmwl1231%2Fdsh-notify' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
   $npmOk = ($r.StatusCode -eq 200)
+  if ($npmOk) {
+    $meta = $r.Content | ConvertFrom-Json
+    $npmDetail = 'latest=' + $meta.'dist-tags'.latest
+  }
 } catch { $npmOk = $false }
-Check 'npm package published (Plugin Center gate)' $npmOk 'not published yet; repo is still listable via github:'
+Check 'npm package published (Plugin Center gate)' $npmOk $npmDetail
 
 foreach ($r in $results) {
   $mark = if ($r.ok) { 'PASS' } else { 'FAIL' }
