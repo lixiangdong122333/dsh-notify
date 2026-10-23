@@ -97,6 +97,19 @@ powershell -ExecutionPolicy Bypass -File test-toast.ps1
 
 `notify.ps1` must keep its UTF-8 BOM. Windows PowerShell 5.1 reads a `.ps1` file in the system code page unless a BOM says otherwise, and the action label is Chinese — without the BOM it renders as mojibake. The test suite checks this.
 
+## Releasing
+
+Pushing a `v*` tag stages that version on npm; a normal push only runs the tests.
+
+```bash
+npm version 1.2.0 --no-git-tag-version
+git commit -am "Release 1.2.0"
+git tag v1.2.0
+git push origin main --tags
+```
+
+CI checks that the tag matches `package.json` and that the version is not already published, then stages it. **The version is not installable until a maintainer approves it** at <https://www.npmjs.com/package/@cmwl1231/dsh-notify> under *Staged versions*, entering a 2FA code. The token in CI is stage-only: it can queue a release but cannot publish one, so a compromised workflow cannot ship a version nobody approved.
+
 ## License
 
 MIT
