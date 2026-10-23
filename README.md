@@ -18,6 +18,8 @@ Clicking the toast, or its **打开 DeepSeek-Harness** button, brings DSH to the
 
 Toasts stay quiet while you are already looking at the app: the page reports from the browser whether one of its tabs is the foreground tab of a visible window, and no toast is raised in that case. Plan reviews keep their own approval UI and are not announced by default.
 
+Everything above is adjustable in **Settings → Notifications**, the plugin's own page beside General and Models, or from its row on the Plugins page.
+
 ## Install
 
 Published on npm — this is what the in-app **Plugin Center** uses:
