@@ -11,7 +11,7 @@
 // which the desktop shell already handles by focusing, restoring, or recreating
 // its primary window.
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Config, normalize } from './schema.js';
@@ -447,12 +447,27 @@ function clip(text, max) {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+// The installer writes "DeepSeek-Harness.lnk" into the per-user Start Menu, but a
+// manual or older install may put either spelling in either location, so both are
+// enumerated rather than probed by exact path. notify.ps1 looks the shortcut up
+// the same way and for the same reason: probing a .lnk by its full path reports
+// "missing" on installs where the file is present and toasts fine.
 function findShortcut() {
-  const candidates = [
-    join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'DeepSeek Harness.lnk'),
-    join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'DeepSeek Harness.lnk'),
-  ];
-  return candidates.find(candidate => existsSync(candidate));
+  for (const dir of [
+    join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+  ]) {
+    if (!existsSync(dir)) continue;
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    const match = entries.find(entry => /^DeepSeek.*\.lnk$/i.test(entry));
+    if (match !== undefined) return join(dir, match);
+  }
+  return undefined;
 }
 
 /** The heartbeat the Web page runs while one of its tabs is visible and focused. */

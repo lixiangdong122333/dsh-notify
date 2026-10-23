@@ -39,39 +39,65 @@ Check 'displayName is not on the toast element' (-not $onToast) ''
 Check 'send path registers the AUMID' ($text.Contains('AppUserModelId')) 'the header falls back to the .lnk path without it'
 
 # --- send and inspect -----------------------------------------------------
-$stamp = Get-Date -Format 'HHmmss'
-$title = "DSH probe $stamp"
-$raw = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Mode send -Title $title -Body 'payload verification' -Activate 'dsh://notify'
-$sent = $raw | ConvertFrom-Json
-Check 'helper reports sent' ($sent.state -eq 'sent') $raw
-Check 'helper resolved the shortcut' ([bool]$sent.appId) $raw
-Check 'helper resolved an icon' ([bool]$sent.icon) $raw
-
-Start-Sleep -Milliseconds 1500
-
-# Read the payload back. History coverage varies by Windows build, so a missing
-# entry is reported rather than failed: the toast still shows live.
-$xmlText = $null
-foreach ($entry in $history.GetHistory($shortcut)) {
-  try {
-    if ($entry.Notification -and $entry.Notification.Content) {
-      $candidate = $entry.Notification.Content.GetXml()
-      if ($candidate -and $candidate.Contains($title)) { $xmlText = $candidate; break }
-    }
-  } catch { }
+# Sending is the one part that needs a real install: notify.ps1 raises the toast
+# as the DeepSeek-Harness shortcut's AppUserModelId, and refuses without it.
+# A CI runner has the file but not the app, so the send checks are skipped there
+# rather than reported as failures the environment causes. Everything above
+# (BOM, encoding, XML shape) still runs everywhere and is what protects the file.
+#
+# The shortcut is looked up by enumerating the folder, exactly as notify.ps1 does.
+# Test-Path on a .lnk returns false here even though the file exists and sends
+# fine, so probing the exact path would skip these checks on a working install.
+$shortcutDirs = @(
+  (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+  (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs')
+)
+$installed = $false
+foreach ($dir in $shortcutDirs) {
+  if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { continue }
+  if (@(Get-ChildItem -LiteralPath $dir -Filter 'DeepSeek*.lnk' -ErrorAction SilentlyContinue).Count -gt 0) {
+    $installed = $true
+    break
+  }
 }
 
-if ($xmlText) {
-  [xml]$doc = $xmlText
-  $binding = $doc.toast.visual.binding | Where-Object { $_.template -eq 'ToastGeneric' } | Select-Object -First 1
-  $name = $binding.displayName
-  Check 'read back: displayName is DeepSeek-Harness' ($name -eq 'DeepSeek-Harness') "got '$name'"
-  $action = $doc.toast.actions.action | Select-Object -First 1
-  $wantLabel = [char]0x6253 + [char]0x5F00 + ' DeepSeek-Harness'
-  Check 'read back: action label has no mojibake' ($action.content -eq $wantLabel) "got '$($action.content)'"
-  Check 'read back: launch is dsh://notify' ($doc.toast.launch -eq 'dsh://notify') "got '$($doc.toast.launch)'"
+if (-not $installed) {
+  Write-Host 'SKIP  send checks: DeepSeek-Harness is not installed here (no Start Menu shortcut)'
 } else {
-  Write-Output 'NOTE: the toast was not readable from history on this build; payload checks skipped.'
+  $stamp = Get-Date -Format 'HHmmss'
+  $title = "DSH probe $stamp"
+  $raw = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Mode send -Title $title -Body 'payload verification' -Activate 'dsh://notify'
+  $sent = $raw | ConvertFrom-Json
+  Check 'helper reports sent' ($sent.state -eq 'sent') $raw
+  Check 'helper resolved the shortcut' ([bool]$sent.appId) $raw
+  Check 'helper resolved an icon' ([bool]$sent.icon) $raw
+
+  Start-Sleep -Milliseconds 1500
+
+  # Read the payload back. History coverage varies by Windows build, so a missing
+  # entry is reported rather than failed: the toast still shows live.
+  $xmlText = $null
+  foreach ($entry in $history.GetHistory($shortcut)) {
+    try {
+      if ($entry.Notification -and $entry.Notification.Content) {
+        $candidate = $entry.Notification.Content.GetXml()
+        if ($candidate -and $candidate.Contains($title)) { $xmlText = $candidate; break }
+      }
+    } catch { }
+  }
+
+  if ($xmlText) {
+    [xml]$doc = $xmlText
+    $binding = $doc.toast.visual.binding | Where-Object { $_.template -eq 'ToastGeneric' } | Select-Object -First 1
+    $name = $binding.displayName
+    Check 'read back: displayName is DeepSeek-Harness' ($name -eq 'DeepSeek-Harness') "got '$name'"
+    $action = $doc.toast.actions.action | Select-Object -First 1
+    $wantLabel = [char]0x6253 + [char]0x5F00 + ' DeepSeek-Harness'
+    Check 'read back: action label has no mojibake' ($action.content -eq $wantLabel) "got '$($action.content)'"
+    Check 'read back: launch is dsh://notify' ($doc.toast.launch -eq 'dsh://notify') "got '$($doc.toast.launch)'"
+  } else {
+    Write-Output 'NOTE: the toast was not readable from history on this build; payload checks skipped.'
+  }
 }
 
 $failed = @($results | Where-Object { -not $_.ok })

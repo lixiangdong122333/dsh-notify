@@ -1,0 +1,15 @@
+Find the Start Menu shortcut by listing the folder
+
+Probing the .lnk by its full path reports "missing" on installs where the file is
+there, listed by readdir, and used successfully to raise a toast. That made the
+plugin switch itself off with a warning that named the wrong cause, and it also
+made the local toast suite skip its own send checks.
+
+Both sides now enumerate the Start Menu folder and match DeepSeek*.lnk, which is
+what notify.ps1 already did and the reason it kept working while the host side
+did not. The wider pattern also accepts the "DeepSeek_Harness" spelling the
+comment in notify.ps1 mentions for older or manual installs.
+
+The toast suite's send checks now skip when DeepSeek-Harness is not installed,
+which is the case on a CI runner, and run otherwise. Previously they always ran
+and always failed there.
