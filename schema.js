@@ -75,7 +75,7 @@ export const Config = z.object({
 
   titleEnded: z.string()
     .default('DSH · 任务已结束')
-    .description('其它结束情况的标题。Title for other endings.'),
+    .description('其他结束情况的标题。Title for other endings.'),
 
   titleQuestion: z.string()
     .default('DSH · 需要你确认')

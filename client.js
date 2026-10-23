@@ -77,7 +77,7 @@ window.__ModuleLoader__.load({
         ],
       },
       titleCompleted: { kind: 'text', label: ['Title when a task finishes', '任务完成时的标题'] },
-      titleEnded: { kind: 'text', label: ['Title for other endings', '其它结束情况的标题'] },
+      titleEnded: { kind: 'text', label: ['Title for other endings', '其他结束情况的标题'] },
       titleQuestion: { kind: 'text', label: ['Title for a question', '需要确认时的标题'] },
     };
 
@@ -419,22 +419,19 @@ window.__ModuleLoader__.load({
         // no consumers would just be a second place to keep the same text.
         const lang = String(ctx.locale.getLocale?.().active ?? 'en').startsWith('zh') ? 'zh' : 'en';
 
-        // Every colour the page uses is a stylesheet rule rather than an inline
-        // style, because a <select>'s popup list can only be reached that way and
-        // because one place for the palette is easier to keep consistent.
+        // Every colour lives in STYLESHEET rather than in inline styles: a
+        // <select>'s popup list can only be reached by a stylesheet rule.
         //
         // `styles` is a Client builtin (styles.insert), but which route exposes it
-        // to a dynamic half is not something this bundle can assume: the context
-        // getter, the loader's second argument, and a plain <style> element are
-        // all tried, and the first that works is used. Colours matter less than
-        // the page working, so a failure here must not be silent.
+        // to a dynamic half is not guaranteed, so the known routes are tried in
+        // turn and a style element is used if none answers.
         const styleRoutes = [
           ['ctx.get', () => ctx.get?.('styles')],
           ['builtins', () => builtins?.styles],
           ['ctx.styles', () => ctx.styles],
         ];
-        let injected = null;
-        for (const [name, resolve] of styleRoutes) {
+        let injected = false;
+        for (const [, resolve] of styleRoutes) {
           let candidate;
           try {
             candidate = resolve();
@@ -443,19 +440,16 @@ window.__ModuleLoader__.load({
           }
           if (candidate && typeof candidate.insert === 'function') {
             candidate.insert(STYLESHEET);
-            injected = name;
+            injected = true;
             break;
           }
         }
-        if (injected === null && typeof document !== 'undefined') {
-          // Last resort: a style element owned by this run.
+        if (!injected && typeof document !== 'undefined') {
           const element = document.createElement('style');
           element.setAttribute('data-dsh-notify', '');
           element.textContent = STYLESHEET;
           document.head.appendChild(element);
-          injected = 'document';
         }
-        console.debug?.(`[dsh-notify] stylesheet injected via ${injected ?? 'nothing'}`);
 
         // The test toast is raised by the Host, which owns the PowerShell helper
         // and the shortcut lookup; the page only asks for one and reports the
