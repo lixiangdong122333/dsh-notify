@@ -29,12 +29,29 @@ syncBuiltinESMExports();
 // importing so the flag is in place however the plugin decides to read it.
 const savedTestMode = process.env.DSH_NOTIFY_TEST_MODE;
 process.env.DSH_NOTIFY_TEST_MODE = '1';
+// The delivery path is now platform-specific. The suite names Windows by
+// default so the original assertions hold on every runner, and switches the
+// name to darwin in its own section below.
+const savedPlatform = process.env.DSH_NOTIFY_TEST_PLATFORM;
+process.env.DSH_NOTIFY_TEST_PLATFORM = 'win32';
 process.on('exit', () => {
   if (savedTestMode === undefined) delete process.env.DSH_NOTIFY_TEST_MODE;
   else process.env.DSH_NOTIFY_TEST_MODE = savedTestMode;
+  if (savedPlatform === undefined) delete process.env.DSH_NOTIFY_TEST_PLATFORM;
+  else process.env.DSH_NOTIFY_TEST_PLATFORM = savedPlatform;
 });
 
-const { apply, inject, Config } = await import('./index.js');
+// The config route resolves its write target through DSH_PROFILE_DIR first, so
+// a run on a developer machine would rewrite the real profile's patch as soon
+// as that patch declares this plugin. Detach it for the whole run and restore
+// it on exit; the store's own cases below use a scratch file instead.
+const savedProfileDir = process.env.DSH_PROFILE_DIR;
+delete process.env.DSH_PROFILE_DIR;
+process.on('exit', () => {
+  if (savedProfileDir !== undefined) process.env.DSH_PROFILE_DIR = savedProfileDir;
+});
+
+const { apply, inject, Config, deliveryState } = await import('./index.js');
 const { normalize } = await import('./schema.js');
 const { writeConfig, findPatch } = await import('./settings-store.js');
 const { readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } = await import('node:fs');
@@ -80,6 +97,37 @@ function makeContext() {
     indexInjections,
   };
   return ctx;
+}
+
+/**
+ * Build a request the route gate accepts, shaped like Node's IncomingMessage.
+ * Overrides let one field be broken on purpose for the gate cases below.
+ */
+function fakeRequest({
+  method = 'GET',
+  url = '/',
+  host = '127.0.0.1:51172',
+  // `null` means "deliberately no gate header"; `undefined` would fall back to
+  // the default, which is exactly the case the gate tests need to send.
+  gate = '1',
+  origin,
+  remote = '127.0.0.1',
+  body,
+} = {}) {
+  const headers = { host };
+  if (gate !== null) headers['x-dsh-notify'] = gate;
+  if (origin !== undefined) headers.origin = origin;
+  return {
+    method,
+    url,
+    headers,
+    socket: { remoteAddress: remote },
+    on(event, handler) {
+      if (body === undefined) return;
+      if (event === 'data') handler(JSON.stringify(body));
+      if (event === 'end') handler();
+    },
+  };
 }
 
 function makeSession({ id, cwd, events = [], origin }) {
@@ -174,7 +222,7 @@ apply(focused, { skipWhenFocused: true });
 const route = focused.routes.get('/dsh-notify/focus');
 await new Promise((resolve) => {
   const headers = {};
-  route.handler({ url: '/dsh-notify/focus?on=tab-1' }, { writeHead: (code) => { headers.code = code; }, end: () => { headers.end = true; resolve(); } });
+  route.handler(fakeRequest({ url: '/dsh-notify/focus?on=tab-1' }), { writeHead: (code) => { headers.code = code; }, end: () => { headers.end = true; resolve(); } });
   check('focus report accepted', headers.code === 204);
 });
 const focusedSession = makeSession({ id: 'session-focused', cwd: 'C:\\work', events: [assistantMessage('done')] });
@@ -304,7 +352,7 @@ check('test route is registered', testRoute !== undefined);
 if (testRoute) {
   let status = 0;
   let payload = '';
-  testRoute.handler({}, {
+  testRoute.handler(fakeRequest(), {
     writeHead: (code) => { status = code; },
     end: (text) => { payload = text ?? ''; },
   });
@@ -324,14 +372,7 @@ check('config route is registered', configRoute !== undefined);
 if (configRoute) {
   const call = (method, body) => new Promise((resolve) => {
     let payload = '';
-    const req = {
-      method,
-      on: (event, handler) => {
-        if (event === 'data') handler(JSON.stringify(body ?? {}));
-        if (event === 'end') handler();
-      },
-    };
-    configRoute.handler(req, {
+    configRoute.handler(fakeRequest({ method, body: body ?? {} }), {
       writeHead: () => {},
       end: (text) => { payload = text ?? ''; },
     });
@@ -364,12 +405,9 @@ if (configRoute) {
   writeFileSync(join(fakeProfile, 'cordis.patch.yml'), '- id: dsh-notify\n  name: "@scope/name"\n', 'utf8');
   // The package's own copy also names us; it must lose to the profile's.
   writeFileSync(join(fakePkg, 'cordis.patch.yml'), '- id: dsh-notify\n  name: "@scope/name"\n', 'utf8');
-  const savedEnv = process.env.DSH_PROFILE_DIR;
-  delete process.env.DSH_PROFILE_DIR;
   check('findPatch resolves the profile patch, not the package copy',
     findPatch(fakePkg) === join(fakeProfile, 'cordis.patch.yml'),
     String(findPatch(fakePkg)));
-  if (savedEnv !== undefined) process.env.DSH_PROFILE_DIR = savedEnv;
   rmSync(fakeProfile, { recursive: true, force: true });
 
   // Persistence is a different concern from the live update: test the store on a
@@ -409,6 +447,212 @@ if (configRoute) {
   check('config write normalizes a bad value instead of storing it',
     rejected.ok === true && rejected.config?.bodySource === 'answer',
     JSON.stringify(rejected.config?.bodySource));
+
+  // The gate protects the route that writes the profile patch: a cross-origin
+  // page cannot add a non-safelisted header, and a rebinding page cannot forge
+  // a loopback Host. Every case below must be refused before any read/write.
+  const answer = (req) => new Promise((resolve) => {
+    let status = 0;
+    let payload = '';
+    configRoute.handler(req, { writeHead: (code) => { status = code; }, end: (text) => { payload = text ?? ''; } });
+    setTimeout(() => {
+      let parsed = {};
+      try { parsed = JSON.parse(payload); } catch { parsed = { parseFailed: true, payload }; }
+      resolve({ status, parsed });
+    }, 10);
+  });
+
+  const refusals = [
+    ['a request without the gate header', fakeRequest({ gate: null }), 'forbidden'],
+    ['a non-loopback peer', fakeRequest({ remote: '10.0.0.9' }), 'bad-remote'],
+    ['a non-loopback Host', fakeRequest({ host: 'evil.example:51172' }), 'bad-host'],
+    ['a cross-origin Origin', fakeRequest({ origin: 'http://evil.example' }), 'cross-origin'],
+  ];
+  for (const [label, req, reason] of refusals) {
+    const result = await answer(req);
+    check(`the route gate refuses ${label}`,
+      result.status === 403 && result.parsed.reason === reason,
+      `status=${result.status} reason=${result.parsed.reason}`);
+  }
+
+  const desktop = await answer(fakeRequest({ origin: 'dsh-app://app' }));
+  check('the route gate accepts the desktop shell origin',
+    desktop.status === 200 && desktop.parsed.ok === true,
+    `status=${desktop.status} reason=${desktop.parsed.reason}`);
+
+  // A profile patch that exists but does not declare the plugin is the normal
+  // state of a bundle install. The first save must add the row there rather
+  // than reporting "read-only" forever.
+  const freshProfile = join(tmpdir(), `dsh-notify-fresh-${process.pid}`);
+  const freshPkg = join(freshProfile, 'node_modules', '@scope', 'name');
+  mkdirSync(freshPkg, { recursive: true });
+  writeFileSync(join(freshProfile, 'cordis.patch.yml'), [
+    '# keep this comment',
+    '- id: another-plugin',
+    '  config:',
+    '    keep: me',
+    '',
+  ].join('\n'), 'utf8');
+
+  check('findPatch falls back to the profile that hosts the package',
+    findPatch(freshPkg) === join(freshProfile, 'cordis.patch.yml'),
+    String(findPatch(freshPkg)));
+
+  const appended = writeConfig(join(freshProfile, 'cordis.patch.yml'), {
+    sound: 'silent',
+    notifyEndKinds: ['completed', 'error'],
+  });
+  const freshText = readFileSync(join(freshProfile, 'cordis.patch.yml'), 'utf8');
+  check('the first save adds the dsh-notify row', appended.created === true && appended.path === join(freshProfile, 'cordis.patch.yml'), JSON.stringify(appended));
+  check('the added row patches the installed bundle',
+    /- id: dsh-notify\n  name: "@cmwl1231\/dsh-notify"\n  config:\n    sound: silent/.test(freshText),
+    freshText);
+  check('the added row keeps the previous rows and comments',
+    freshText.includes('# keep this comment') && freshText.includes('    keep: me'), freshText);
+  writeConfig(join(freshProfile, 'cordis.patch.yml'), { sound: 'default' });
+  const freshTwice = readFileSync(join(freshProfile, 'cordis.patch.yml'), 'utf8');
+  check('the second save edits the added row instead of adding another',
+    freshTwice.split('- id: dsh-notify').length === 2, freshTwice);
+  rmSync(freshProfile, { recursive: true, force: true });
+}
+
+// --- macOS delivery ---------------------------------------------------------
+// The platform name makes this run on any CI runner; `spawn` is stubbed at the
+// top of this suite, so no real notification is raised.
+process.env.DSH_NOTIFY_TEST_PLATFORM = 'darwin';
+const macCtx = makeContext();
+apply(macCtx, { skipWhenFocused: false, questionDelayMs: 5 });
+process.env.DSH_NOTIFY_TEST_PLATFORM = 'win32';
+
+const macSession = makeSession({
+  id: 'session-mac',
+  cwd: '/tmp',
+  events: [userMessage('帮我跑完'), assistantMessage('已经完成了。')],
+});
+spawned.length = 0;
+macCtx.emit('agent/created', { agent: { id: macSession.id, session: macSession, status: 'idle' } });
+macCtx.emit('session/event', macSession, { type: 'turn/start', time: Date.now() });
+macCtx.emit('session/event', macSession, { type: 'turn/end', time: Date.now(), data: { reason: { kind: 'completed' } } });
+await new Promise(resolve => setTimeout(resolve, 40));
+
+const macToast = spawned[0];
+check('macOS delivery spawns a native notifier',
+  macToast !== undefined && ['osascript', 'terminal-notifier'].includes(macToast.command),
+  JSON.stringify(macToast?.command));
+check('macOS notifier carries the title and the answer', (() => {
+  if (macToast?.command === 'osascript') {
+    const script = macToast.args?.[1] ?? '';
+    return script.includes('display notification')
+      && script.includes('已经完成了')
+      && script.includes('任务完成');
+  }
+  const args = macToast?.args ?? [];
+  return args.includes('-title') && args.includes('-message')
+    && args.some(arg => String(arg).includes('已经完成了'));
+})(), JSON.stringify(macToast?.args));
+
+const macConfigRoute = macCtx.routes.get('/dsh-notify/config');
+if (macConfigRoute) {
+  const payload = await new Promise((resolve) => {
+    let text = '';
+    macConfigRoute.handler(fakeRequest({ method: 'GET' }), { writeHead: () => {}, end: (value) => { text = value ?? ''; } });
+    resolve(text);
+  });
+  let parsed = {};
+  try { parsed = JSON.parse(payload); } catch { parsed = { parseFailed: true }; }
+  check('the macOS config route reports its backend',
+    parsed.ok === true && parsed.supported === true && parsed.platform === 'darwin'
+    && ['osascript', 'terminal-notifier'].includes(parsed.backend),
+    JSON.stringify(parsed).slice(0, 220));
+}
+
+// --- when nothing can be delivered ------------------------------------------
+// The macOS report this suite grew from: the delivery half is off, the settings
+// page still renders, and the route it calls must answer. A route that was never
+// registered answers 404 with an empty body, which the page could only report as
+// "Unexpected end of JSON input".
+check('deliveryState supports macOS through osascript',
+  deliveryState({ platform: 'darwin' }) === 'ready');
+check('deliveryState keeps unsupported platforms off',
+  deliveryState({ platform: 'linux' }) === 'unsupported-platform');
+check('deliveryState reports a missing shortcut', deliveryState({ platform: 'win32' }) === 'missing-shortcut');
+check('deliveryState is ready on Windows with a shortcut',
+  deliveryState({ platform: 'win32', shortcut: 'C:\\Start Menu\\DeepSeek-Harness.lnk' }) === 'ready');
+check('deliveryState lets test mode bypass both guards',
+  deliveryState({ platform: 'linux', testMode: true }) === 'ready');
+
+if (process.platform !== 'win32') {
+  // Leave test mode only for this instance, then restore it for the rest of the
+  // suite: `apply` reads the flag when it is called, not when it is imported.
+  const savedMode = process.env.DSH_NOTIFY_TEST_MODE;
+  delete process.env.DSH_NOTIFY_TEST_MODE;
+  const native = makeContext();
+  apply(native, {});
+  if (savedMode !== undefined) process.env.DSH_NOTIFY_TEST_MODE = savedMode;
+
+  const macHost = process.platform === 'darwin';
+  const expectedDelivery = macHost ? 'ready' : 'unsupported-platform';
+
+  check('the settings routes exist on every non-Windows Host',
+    native.routes.has('/dsh-notify/config') && native.routes.has('/dsh-notify/test'),
+    [...native.routes.keys()].join(', '));
+  check('the delivery listeners follow the platform',
+    macHost
+      ? (native.listeners.get('session/event') ?? []).length === 1
+      : (native.listeners.get('session/event') ?? []).length === 0,
+    [...native.listeners.keys()].join(', '));
+
+  const nativeConfig = native.routes.get('/dsh-notify/config');
+  if (nativeConfig) {
+    const read = await new Promise((resolve) => {
+      let payload = '';
+      nativeConfig.handler(fakeRequest({ method: 'GET' }), { writeHead: () => {}, end: (text) => { payload = text ?? ''; } });
+      resolve(payload);
+    });
+    let parsed = {};
+    try { parsed = JSON.parse(read); } catch { parsed = { parseFailed: true, read }; }
+    check('the native config route answers JSON, not an empty body',
+      parsed.parseFailed !== true, String(read).slice(0, 200));
+    check('the native config route reports the real delivery state',
+      parsed.ok === true && parsed.supported === (expectedDelivery === 'ready')
+      && parsed.delivery === expectedDelivery,
+      JSON.stringify(parsed).slice(0, 220));
+    check('the native config route names the platform',
+      parsed.platform === process.platform, String(parsed.platform));
+    if (macHost) {
+      check('the macOS config route names its backend',
+        ['osascript', 'terminal-notifier'].includes(parsed.backend), String(parsed.backend));
+    }
+    check('the native config route still returns the resolved settings',
+      parsed.config?.sound === 'default' && Array.isArray(parsed.config?.notifyEndKinds),
+      JSON.stringify(parsed.config ?? {}).slice(0, 200));
+  }
+
+  const nativeTest = native.routes.get('/dsh-notify/test');
+  if (nativeTest) {
+    const beforeSpawn = spawned.length;
+    // The handler answers from a promise now, so wait for `end` instead of
+    // reading whatever has been written synchronously.
+    const payload = await new Promise((resolve) => {
+      nativeTest.handler(fakeRequest(), { writeHead: () => {}, end: (value) => resolve(value ?? '') });
+    });
+    let parsed = {};
+    try { parsed = JSON.parse(payload); } catch { parsed = { parseFailed: true }; }
+    if (macHost) {
+      // The suite's spawn stub answers 0, so this proves the macOS plan is
+      // wired into the test button without raising a real notification.
+      check('the macOS test route sends through the native notifier',
+        parsed.ok === true && parsed.platform === 'darwin', `payload=${JSON.stringify(parsed).slice(0, 220)}`);
+      check('the macOS test route spawned exactly one notifier',
+        spawned.length === beforeSpawn + 1, `spawned=${spawned.length - beforeSpawn}`);
+    } else {
+      check('the unsupported test route explains itself instead of failing',
+        parsed.ok === false && parsed.reason === 'unsupported-platform',
+        String(payload).slice(0, 200));
+      check('the unsupported test route raises nothing', spawned.length === beforeSpawn,
+        `spawned=${spawned.length - beforeSpawn}`);
+    }
+  }
 }
 
 const failed = results.filter(result => !result.ok);
