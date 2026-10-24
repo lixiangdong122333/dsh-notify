@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Task Notifications",
-    "description": "Shows a Windows notification when a task finishes or the agent needs your answer; click it to return to DeepSeek Harness."
+    "description": "Shows a desktop notification when a task finishes or the agent needs your answer; click it to return to DeepSeek-Harness."
   }
 }

@@ -41,36 +41,48 @@ function block(config, indent) {
 }
 
 /**
- * Find the profile patch that declares this plugin.
+ * Find the profile patch this plugin's settings belong in.
  *
  * The plugin ships its own `cordis.patch.yml` (the defaults an install starts
  * from), so a plain "first file that mentions us" search would pick the wrong
  * one and write settings the Host never reads. The profile is therefore derived
  * from where the package is installed — `<profile>/node_modules/<name>` — and
  * `DSH_PROFILE_DIR` only ever narrows that down.
+ *
+ * A profile patch that already declares the plugin wins. When none does, the
+ * install-derived profile patch is still returned so the first save can add the
+ * row there; that is the file the Host reads, and it is why the settings page is
+ * writable on a normal install instead of read-only. A run from a checkout
+ * (`DSH_PROFILE_DIR` pointing somewhere else, no patch next to the package)
+ * still resolves to null and stays read-only.
  * @param {string} here the plugin's own directory
- * @returns {string | null} the profile patch path, or null when nothing declares us
+ * @returns {string | null} the profile patch path, or null when there is none
  */
 export function findPatch(here) {
   // `<profile>/node_modules/@scope/name` -> `<profile>`: the scope adds a level,
   // so it is four steps up, not three.
   const fromInstall = join(here, '..', '..', '..');
+  const installed = join(fromInstall, 'cordis.patch.yml');
   const envDir = process.env.DSH_PROFILE_DIR;
+  const envPatch = envDir === undefined ? undefined : join(envDir, 'cordis.patch.yml');
 
-  const candidates = [
-    envDir === undefined ? undefined : join(envDir, 'cordis.patch.yml'),
-    join(fromInstall, 'cordis.patch.yml'),
-  ].filter(path => typeof path === 'string');
-
+  const candidates = [envPatch, installed].filter(path => typeof path === 'string');
+  let fallback = null;
   for (const path of candidates) {
+    let text;
     try {
-      const text = readFileSync(path, 'utf8');
-      if (locateRow(text) !== null) return path;
+      text = readFileSync(path, 'utf8');
     } catch {
       // Missing or unreadable candidate: try the next one.
+      continue;
     }
+    if (locateRow(text) !== null) return path;
+    // The install-derived patch is the profile that hosts this package, so it is
+    // the right place to add the row. `DSH_PROFILE_DIR` may name a different
+    // profile (a checkout run), and writing there would be wrong.
+    if (path === installed) fallback = path;
   }
-  return null;
+  return fallback;
 }
 
 /**
@@ -112,7 +124,24 @@ export function writeConfig(path, config) {
   }
 
   const row = locateRow(text);
-  if (row === null) return { error: `no dsh-notify row in ${path}` };
+  if (row === null) {
+    // The profile patch does not declare the plugin yet (its defaults come from
+    // the bundle's own patch). Add the row once; every later save edits it in
+    // place, so a hand edit and the settings page keep writing the same block.
+    const added = [
+      '- id: dsh-notify',
+      '  name: "@cmwl1231/dsh-notify"',
+      ...block(config, 2),
+      '',
+    ];
+    const prefix = text.trim() === '' ? '' : `${text.replace(/\s*$/u, '')}\n\n`;
+    try {
+      writeFileSync(path, `${prefix}${added.join('\n')}`, 'utf8');
+    } catch (error) {
+      return { error: `cannot write ${path}: ${String(error)}` };
+    }
+    return { path, created: true };
+  }
 
   const lines = text.split('\n');
   // Replace an existing config mapping in place, or insert one after the row's

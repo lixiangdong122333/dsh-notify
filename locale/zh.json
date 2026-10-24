@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "任务通知",
-    "description": "任务完成或助手需要你介入时弹出 Windows 通知，点击通知直接回到 DeepSeek Harness。"
+    "description": "任务完成或助手需要你介入时弹出桌面通知，点击通知直接回到 DeepSeek Harness。"
   }
 }

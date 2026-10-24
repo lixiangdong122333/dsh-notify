@@ -1,12 +1,12 @@
 {
   "name": "@cmwl1231/dsh-notify",
-  "version": "1.2.0",
-  "description": "Windows toast notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness, with a settings page inside DSH",
+  "version": "1.3.0",
+  "description": "Windows toast and macOS notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness, with a settings page inside DSH",
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "node test-plugin.mjs && node test-client.mjs",
-    "check": "node --check index.js && node --check client.js && node --check schema.js && node --check settings-store.js"
+    "test": "node test-plugin.mjs && node test-client.mjs && node test-macos.mjs && node test-route-gate.mjs",
+    "check": "node --check index.js && node --check client.js && node --check macos.js && node --check route-gate.js && node --check schema.js && node --check settings-store.js"
   },
   "keywords": [
     "dsh",
@@ -14,7 +14,8 @@
     "deepseek-harness",
     "notification",
     "toast",
-    "windows"
+    "windows",
+    "macos"
   ],
   "repository": {
     "type": "git",
@@ -25,7 +26,8 @@
     "url": "https://github.com/lixiangdong122333/dsh-notify/issues"
   },
   "os": [
-    "win32"
+    "win32",
+    "darwin"
   ],
   "exports": {
     ".": "./index.js",
@@ -37,6 +39,8 @@
   "files": [
     "index.js",
     "client.js",
+    "macos.js",
+    "route-gate.js",
     "schema.js",
     "settings-store.js",
     "notify.ps1",

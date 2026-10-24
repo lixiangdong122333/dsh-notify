@@ -1,10 +1,10 @@
 # dsh-notify
 
-给 [DeepSeek-Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）用的 Windows 桌面通知插件。
+给 [DeepSeek-Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）用的桌面通知插件，支持 Windows 和 macOS。
 
 把任务交给 DSH，然后去忙别的事。只有当真的需要你时才把你拉回来：任务完成了，或者助手正等着你回答，都会弹一个通知。点一下通知就回到 DSH。
 
-> 仅支持 Windows。其他平台上插件会正常加载，但不做任何事。
+> 支持 Windows 10/11 和 macOS。Linux 上插件能加载但不会弹通知；设置页照常打开并说明原因。
 
 ## 它做什么
 
@@ -14,7 +14,7 @@
 | 任务出错，或达到 token 上限 | `DSH · 任务已结束` |
 | 助手向你提问，6 秒内没人回答 | `DSH · 需要你确认`，正文是那个问题 |
 
-点通知本身，或者点上面的 **打开 DeepSeek-Harness** 按钮，DSH 就会来到前台。窗口最小化了会还原，已经收到托盘里会重新打开。这用的是桌面端本来就注册好的 `dsh://notify` 协议。
+点通知本身，或者点上面的 **打开 DeepSeek-Harness** 按钮，DSH 就会来到前台。窗口最小化了会还原，已经收到托盘里会重新打开。Windows 上用的是桌面端本来就注册好的 `dsh://notify` 协议；macOS 上点击能力来自 [terminal-notifier](https://github.com/julienXX/terminal-notifier)，它会重新打开应用。没装 terminal-notifier 时通知照常弹，只是点击没有反应。
 
 你已经在看 DSH 的时候不会打扰：页面会从浏览器那边报告自己的标签页是不是前台可见窗口，是的话就不弹。计划审核有它自己的确认界面，默认也不通知。
 
@@ -44,9 +44,13 @@ dsh plugin --profile web add github:lixiangdong122333/dsh-notify
 
 ## 配置
 
-打开 **设置 → 通知**，或者 **设置 → 内置插件 → 本插件**，两处是同一张表单。它改的是你 profile 里 `cordis.patch.yml` 的 `dsh-notify` 那一行，每次改动立即生效，底部还有一个 **发送测试通知** 按钮，用来确认整条链路是通的。
+打开 **设置 → 通知**，或者 **设置 → 内置插件 → 本插件**，两处是同一张表单。它改的是你 profile 里 `cordis.patch.yml` 的 `dsh-notify` 那一行，每次改动立即生效；可投递时底部还有一个 **发送测试通知** 按钮，用来确认整条链路是通的。
 
 直接手改那一行效果一样，两者写的是同一份数据。所有键都可以不写，下面是没做任何覆盖时的默认值：
+
+无法投递通知的环境（Linux，或者找不到开始菜单快捷方式的 Windows），设置页同样能打开：它会显示当前生效的设置，并用一条说明代替错误提示。第一次保存会把插件的配置行加进 profile 的 `cordis.patch.yml`（Host 读取的那份文件），所以从插件中心安装的包可以直接在页面里改；如果是从源码目录运行、压根没有 profile patch，则保持只读。
+
+插件自己的路由只接受本机回环请求，并要求 `x-dsh-notify: 1` 请求头；桌面壳转发过来的 `dsh-app://app` 来源单独放行。远程或局域网页面因此会拿到 403，而不是设置表单。
 
 ```yaml
 - id: dsh-notify
@@ -82,22 +86,18 @@ dsh plugin --profile web add github:lixiangdong122333/dsh-notify
 
 **焦点判断** — 宿主提供的一个小脚本把标签页的可见性和焦点状态报回宿主。要判断「用户现在能不能看到这个」，这是唯一可靠的信号。
 
-**投递** — `notify.ps1` 通过 WinRT 以应用自己的开始菜单快捷方式发出通知。Windows 解析通知里显示的应用名，读的是 `AppUserModelId` 注册表项，而不是通知 XML 里写的内容，所以脚本每次发送前会先把那项写好。没有这一步，通知标题栏会退化成显示快捷方式的原始路径。
+**投递** — Windows 上 `notify.ps1` 通过 WinRT 以应用自己的开始菜单快捷方式发出通知。Windows 解析通知里显示的应用名，读的是 `AppUserModelId` 注册表项，而不是通知 XML 里写的内容，所以脚本每次发送前会先把那项写好。macOS 上 Host 会优先调用 `terminal-notifier`，没装就用系统自带的 `osascript`（`display notification`）。两者都是普通子进程，插件因此没有原生依赖。macOS 的通知会以 helper 自己的名字出现（terminal-notifier 或「脚本编辑器」），通知权限也是授予那个名字。
 
 ## 环境要求
 
-* Windows 10 或 11
-* Windows PowerShell 5.1（所有受支持的 Windows 都自带）
-* DeepSeek-Harness，并且有应用的开始菜单快捷方式
+* Windows 10 或 11，带 Windows PowerShell 5.1（所有受支持的 Windows 都自带），并且有 DeepSeek-Harness 的开始菜单快捷方式；或者
+* macOS（自带 `osascript` 即可）。`terminal-notifier` 是可选的，只有想在点击通知时回到 DSH 才需要：`brew install terminal-notifier`
 
 ## 开发
 
 ```bash
-# 插件逻辑和设置读写，跑在假上下文上，不需要装 DSH
-node test-plugin.mjs
-
-# 设置页的槽位注册（用假的模块加载器和 React）
-node test-client.mjs
+# 全部测试：插件逻辑、设置页渲染、macOS 命令计划
+npm test
 
 # 通知载荷与编码检查（Windows，会真的发一条通知）
 powershell -ExecutionPolicy Bypass -File test-toast.ps1
@@ -110,9 +110,9 @@ powershell -ExecutionPolicy Bypass -File test-toast.ps1
 推送 `v*` 标签会把那个版本暂存到 npm，普通推送只跑测试。
 
 ```bash
-npm version 1.2.0 --no-git-tag-version
-git commit -am "Release 1.2.0"      # 只用 -am 会漏掉新文件，有新增文件时改成 git add -A
-git tag v1.2.0
+npm version 1.3.0 --no-git-tag-version
+git commit -am "Release 1.3.0"      # 只用 -am 会漏掉新文件，有新增文件时改成 git add -A
+git tag v1.3.0
 git push origin main --tags
 ```
 

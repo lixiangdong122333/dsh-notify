@@ -1,4 +1,4 @@
-// Windows toast notifications for DeepSeek Harness.
+// Desktop notifications for DeepSeek-Harness on Windows and macOS.
 //
 // Two moments raise a toast:
 //   * a turn ends (the task finished, failed, or stopped), observed on the
@@ -6,14 +6,17 @@
 //   * the agent asks the user something (`ask_user_question`, which includes
 //     plan approval) and the request is still pending after a short delay.
 //
-// notify.ps1 raises the toast through WinRT as the DSH Start Menu shortcut, so
-// Windows shows the application's own icon. Clicking it runs `dsh://notify`,
-// which the desktop shell already handles by focusing, restoring, or recreating
-// its primary window.
+// Windows delivery goes through notify.ps1 (WinRT, as the DSH Start Menu
+// shortcut); clicking it runs `dsh://notify`, which the desktop shell already
+// handles by focusing, restoring, or recreating its primary window. macOS
+// delivery is described in macos.js: terminal-notifier when it is installed
+// (clicking it reopens the app), otherwise the built-in osascript.
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findAppBundle, macToastPlan, resolveTerminalNotifier } from './macos.js';
+import { gateRequest } from './route-gate.js';
 import { Config, normalize } from './schema.js';
 import { findPatch, writeConfig } from './settings-store.js';
 
@@ -30,25 +33,66 @@ export { Config };
 
 export function apply(ctx, config = {}) {
   const logger = ctx.logger;
-  // Two guards decide whether this plugin runs at all: the platform, and the
-  // app's Start Menu shortcut. Both are exactly right for a real install and
-  // both make the plugin a no-op on a test runner, which has neither Windows nor
-  // DeepSeek-Harness. DSH_NOTIFY_TEST_MODE exists so the suite can exercise the
-  // plugin instead of its guards; nothing sets it outside the tests.
+  // Two guards decide whether a toast can be raised at all: the platform, and
+  // the Windows Start Menu shortcut. Neither may guard the settings routes below.
+  // The settings page is a separate Client half that renders on every platform,
+  // and a route that was never registered answers 404 with an empty body, which
+  // that page can only report as "Unexpected end of JSON input". Off Windows, or
+  // with the shortcut missing, the plugin therefore keeps answering its settings
+  // routes and only the delivery path stays off.
+  //
+  // DSH_NOTIFY_TEST_MODE replaces both guards so the suite can exercise the
+  // delivery path on a CI runner that has neither Windows nor DeepSeek-Harness;
+  // nothing sets it outside the tests.
   const testMode = process.env.DSH_NOTIFY_TEST_MODE === '1';
-  if (process.platform !== 'win32' && !testMode) return;
-
   const options = normalize(config);
   const clipBody = text => clip(text, options.bodyLength);
 
-  const shortcut = findShortcut();
-  if (shortcut === undefined && !testMode) {
+  // The suite drives each delivery path on a CI runner that is neither Windows
+  // nor macOS, so it may name the platform the plugin should act as. Nothing
+  // outside the tests sets DSH_NOTIFY_TEST_PLATFORM.
+  const platform = testMode && process.env.DSH_NOTIFY_TEST_PLATFORM
+    ? process.env.DSH_NOTIFY_TEST_PLATFORM
+    : process.platform;
+  const shortcut = platform === 'win32' ? findShortcut() : undefined;
+  const terminalNotifier = platform === 'darwin' ? resolveTerminalNotifier() : undefined;
+  /** Which process actually draws the toast; also shown on the settings page. */
+  const backend = platform === 'win32'
+    ? 'winrt'
+    : platform === 'darwin'
+      ? (terminalNotifier === undefined ? 'osascript' : 'terminal-notifier')
+      : undefined;
+  /** The app a click should reopen; only known for the packaged desktop app. */
+  const app = platform === 'darwin' ? findAppBundle() : undefined;
+  const delivery = deliveryState({ testMode, platform, shortcut });
+  const ready = delivery === 'ready';
+
+  if (delivery === 'unsupported-platform') {
+    logger?.info?.(`dsh-notify: desktop notifications need Windows or macOS; answering the settings page only on ${platform}`);
+  } else if (delivery === 'missing-shortcut') {
     logger?.warn?.('dsh-notify: the DeepSeek Harness Start Menu shortcut is missing; notifications stay off');
-    return;
   }
 
   const log = (stage, detail = {}) => logger?.debug?.(`dsh-notify: ${stage} ${JSON.stringify(detail)}`);
   const warn = (stage, detail = {}) => logger?.warn?.(`dsh-notify: ${stage} ${JSON.stringify(detail)}`);
+
+  /**
+   * Answer a request that failed the shared gate. Returns true when the
+   * response has been written and the caller must stop.
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   * @returns {boolean}
+   */
+  function refuse(req, res) {
+    const reason = gateRequest(req);
+    if (reason === null) return false;
+    res.writeHead(403, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify({ ok: false, reason }));
+    return true;
+  }
 
   /** Per-session turn bookkeeping; nothing here is persisted. */
   const turns = new Map();
@@ -74,7 +118,7 @@ export function apply(ctx, config = {}) {
     return focusReports.size > 0;
   }
 
-  if (options.skipWhenFocused) {
+  if (ready && options.skipWhenFocused) {
     ctx.effect(() => ctx.on('webserver/index-inject', (table) => {
       table.push({ kind: 'script-src', placement: 'body', src: FOCUS_PATH });
     }), 'dsh-notify:focus-inject');
@@ -93,6 +137,7 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/dsh-notify/focus',
       handler: (req, res) => {
+        if (refuse(req, res)) return;
         try {
           const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
           const now = Date.now();
@@ -114,8 +159,61 @@ export function apply(ctx, config = {}) {
 
   // ---- notifications -------------------------------------------------------
 
-  function notify(title, body, sound = soundFor('turn')) {
-    const text = clipBody(body);
+  /**
+   * Spawn one notifier and report what happened. Delivery never throws: a
+   * missing helper or a refused toast must not break the agent loop.
+   * @param {string} command
+   * @param {string[]} args
+   * @param {{ okStage: string, failStage: string, detail?: object }} report
+   * @returns {Promise<{ ok: boolean, detail?: string, code?: number }>}
+   */
+  function deliver(command, args, { okStage, failStage, detail = {} }) {
+    let child;
+    try {
+      child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      warn(failStage, { ...detail, error: String(error) });
+      return Promise.resolve({ ok: false, detail: String(error) });
+    }
+
+    let output = '';
+    child.stdout?.on('data', (chunk) => { output += chunk; });
+    child.stderr?.on('data', (chunk) => { output += chunk; });
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      child.on('error', (error) => {
+        warn(failStage, { ...detail, error: String(error) });
+        settle({ ok: false, detail: String(error) });
+      });
+      child.on('exit', (code) => {
+        if (code === 0) {
+          log(okStage, detail);
+          settle({ ok: true });
+          return;
+        }
+        const text = output.trim().slice(0, 400);
+        warn(failStage, { ...detail, code, output: text });
+        settle({ ok: false, code, detail: text || `exit ${code}` });
+      });
+      child.unref?.();
+    });
+  }
+
+  /**
+   * The command that raises one toast on this Host.
+   * @param {{ title: string, body: string, sound: string }} toast
+   * @returns {{ command: string, args: string[] }}
+   */
+  function toastPlan({ title, body, sound }) {
+    if (platform === 'darwin') {
+      return macToastPlan({ backend, title, body, sound, app });
+    }
     // Windows PowerShell drops an empty `-File` argument, so an empty body is
     // sent as "no -Body at all" rather than as a zero-length value: the script
     // defaults it to '' and renders a title-only toast.
@@ -125,18 +223,21 @@ export function apply(ctx, config = {}) {
       '-Mode', 'send',
       '-Title', clip(title, MAX_TITLE),
     ];
-    if (text) args.push('-Body', text);
+    if (body) args.push('-Body', body);
     args.push('-Sound', sound, '-Activate', PROTOCOL);
-    const child = spawn('powershell.exe', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
-    child.stdout?.on('data', (chunk) => { output += chunk; });
-    child.stderr?.on('data', (chunk) => { output += chunk; });
-    child.on('error', (error) => warn('toast-spawn-failed', { error: String(error) }));
-    child.on('exit', (code) => {
-      if (code === 0) log('toast', { title, body });
-      else warn('toast-failed', { code, output: output.trim().slice(0, 400) });
+    return { command: 'powershell.exe', args };
+  }
+
+  function notify(title, body, sound = soundFor('turn')) {
+    const text = clipBody(body);
+    const plan = toastPlan({ title: clip(title, MAX_TITLE), body: text, sound });
+    // A click on macOS only works through terminal-notifier; on Windows the
+    // dsh:// activation is part of notify.ps1.
+    deliver(plan.command, plan.args, {
+      okStage: 'toast',
+      failStage: 'toast-failed',
+      detail: { title: clip(title, MAX_TITLE), body: text, backend },
     });
-    child.unref?.();
   }
 
   /**
@@ -154,29 +255,31 @@ export function apply(ctx, config = {}) {
 
   // `session/event` is an unscoped post-commit feed: this listener sees every
   // live session and filters by identity, the same pattern the agent loop uses.
-  ctx.effect(() => ctx.on('session/event', (session, event) => {
-    try {
-      onSessionEvent(session, event);
-    } catch (error) {
-      log('session-event-failed', { error: String(error) });
-    }
-  }), 'dsh-notify:session-events');
+  if (ready) {
+    ctx.effect(() => ctx.on('session/event', (session, event) => {
+      try {
+        onSessionEvent(session, event);
+      } catch (error) {
+        log('session-event-failed', { error: String(error) });
+      }
+    }), 'dsh-notify:session-events');
 
-  ctx.on('agent/created', ({ agent }) => {
-    const session = agent?.session;
-    if (session === undefined) return;
-    if (session.header?.origin === 'subagent') return;
-    turns.set(session.id, { startedAt: undefined });
-    if (agent.status === 'running') running.add(session.id);
-  });
+    ctx.on('agent/created', ({ agent }) => {
+      const session = agent?.session;
+      if (session === undefined) return;
+      if (session.header?.origin === 'subagent') return;
+      turns.set(session.id, { startedAt: undefined });
+      if (agent.status === 'running') running.add(session.id);
+    });
 
-  ctx.on('agent/disposed', ({ agent }) => {
-    const sessionId = agent?.session?.id;
-    if (sessionId === undefined) return;
-    turns.delete(sessionId);
-    running.delete(sessionId);
-    clearQuestion(sessionId);
-  });
+    ctx.on('agent/disposed', ({ agent }) => {
+      const sessionId = agent?.session?.id;
+      if (sessionId === undefined) return;
+      turns.delete(sessionId);
+      running.delete(sessionId);
+      clearQuestion(sessionId);
+    });
+  }
 
   function onSessionEvent(session, event) {
     const turn = turns.get(session?.id);
@@ -248,7 +351,7 @@ export function apply(ctx, config = {}) {
   // responder, so answering in this window would be ambiguous. Once the delay
   // elapses the listener steps aside, which lets that answerer take the request
   // as usual; by then the toast is up and the user is on their way back.
-  ctx.on('user-questions/request', (request, next) => {
+  if (ready) ctx.on('user-questions/request', (request, next) => {
     const agent = request?.agent;
     if (!options.notifyQuestions || agent === undefined) return next();
     const session = agent.session;
@@ -273,44 +376,34 @@ export function apply(ctx, config = {}) {
   // ---- settings page support -----------------------------------------------
 
   // The settings page asks the Host for a test toast, because the Host owns the
-  // PowerShell helper, the shortcut lookup and the AUMID entry. Doing it here
-  // also means the page reports the real outcome instead of optimistically
-  // claiming success.
+  // platform helpers (PowerShell + the shortcut lookup and AUMID entry on
+  // Windows, terminal-notifier or osascript on macOS). Doing it here also means
+  // the page reports the real outcome instead of optimistically claiming
+  // success.
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-notify/test',
-    handler: (_req, res) => {
+    handler: (req, res) => {
+      if (refuse(req, res)) return;
       const reply = (status, body) => {
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(body));
       };
-      try {
-        const child = spawn('powershell.exe', [
-          '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-          '-File', SCRIPT,
-          '-Mode', 'send',
-          '-Title', clip(options.titleCompleted, MAX_TITLE),
-          '-Body', clipBody('这是一条测试通知，设置页已生效。'),
-          '-Sound', soundFor('turn'),
-          '-Activate', PROTOCOL,
-        ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-        let output = '';
-        child.stdout?.on('data', (chunk) => { output += chunk; });
-        child.stderr?.on('data', (chunk) => { output += chunk; });
-        child.on('error', (error) => reply(500, { ok: false, detail: String(error) }));
-        child.on('exit', (code) => {
-          if (child.exitCode === null) return;
-          if (code === 0) {
-            log('test-toast', {});
-            reply(200, { ok: true });
-          } else {
-            warn('test-toast-failed', { code, output: output.trim().slice(0, 400) });
-            reply(200, { ok: false, detail: output.trim().slice(0, 300) || `exit ${code}` });
-          }
-        });
-      } catch (error) {
-        reply(500, { ok: false, detail: String(error) });
+      // No toast can be raised on this Host. The Client half owns the wording,
+      // so the answer carries the reason code rather than an English sentence.
+      if (!ready) {
+        reply(200, { ok: false, reason: delivery, platform, backend });
+        return;
       }
+      const title = clip(options.titleCompleted, MAX_TITLE);
+      const body = clipBody('这是一条测试通知，设置页已生效。');
+      const plan = toastPlan({ title, body, sound: soundFor('turn') });
+      deliver(plan.command, plan.args, { okStage: 'test-toast', failStage: 'test-toast-failed' })
+        .then((result) => {
+          if (result.ok) reply(200, { ok: true, platform, backend });
+          else reply(200, { ok: false, detail: result.detail ?? `exit ${result.code}`, platform, backend });
+        })
+        .catch((error) => warn('test-toast-reply-failed', { error: String(error) }));
     },
   }), 'dsh-notify:test-route');
 
@@ -325,6 +418,7 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/dsh-notify/config',
     handler: (req, res) => {
+      if (refuse(req, res)) return;
       // Resolved per request: the profile may move or be recreated under a long
       // running Host, and a stale path would silently stop persisting.
       const patch = findPatch(HERE);
@@ -338,8 +432,25 @@ export function apply(ctx, config = {}) {
         notifyEndKinds: [...options.notifyEndKinds],
       });
 
+      // `supported` describes delivery only: the settings themselves are
+      // readable and (when the patch is writable) editable on every platform.
+      const state = () => ({
+        ok: true,
+        writable: patch !== null,
+        supported: ready,
+        delivery,
+        platform,
+        backend,
+        // Only macOS has a variable answer here: Windows always activates via
+        // dsh://notify, and osascript cannot call back at all.
+        clickToFocus: ready && (platform === 'win32'
+          || (platform === 'darwin' && backend === 'terminal-notifier' && app !== undefined)),
+        config: current(),
+        patch,
+      });
+
       if (req.method === 'GET') {
-        reply(200, { ok: true, writable: patch !== null, config: current(), patch });
+        reply(200, state());
         return;
       }
       if (req.method === 'POST') {
@@ -357,7 +468,7 @@ export function apply(ctx, config = {}) {
             const persisted = patch === null
               ? { error: 'this plugin is not declared in a profile patch' }
               : writeConfig(patch, settingsSnapshot(next));
-            reply(200, { ok: true, config: current(), persisted });
+            reply(200, { ...state(), persisted });
           } catch (error) {
             reply(200, { ok: false, detail: String(error) });
           }
@@ -372,9 +483,9 @@ export function apply(ctx, config = {}) {
 
   return {
     /** Raise one toast exactly as the plugin does; useful for a manual check. */
-    notify,
+    notify: ready ? notify : () => warn('toast-skipped', { delivery }),
     /** Resolved settings, so the settings page can show what is in effect. */
-    settings: settingsSnapshot,
+    settings: () => settingsSnapshot(options),
   };
 }
 
@@ -447,6 +558,25 @@ function clip(text, max) {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+/**
+ * Decide whether this Host can deliver a toast, and why not when it cannot.
+ *
+ * The settings routes stay registered in every case; this only switches the
+ * delivery half of the plugin. Kept pure and exported so the suite can check
+ * each platform's answer without running on that platform. macOS is always
+ * ready because osascript ships with it; terminal-notifier only upgrades the
+ * toast from "shows up" to "clicking it reopens DSH".
+ * @param {{ platform?: NodeJS.Platform, testMode?: boolean, shortcut?: string }} input
+ * @returns {'ready' | 'unsupported-platform' | 'missing-shortcut'}
+ */
+export function deliveryState({ platform = process.platform, testMode = false, shortcut } = {}) {
+  if (testMode) return 'ready';
+  if (platform === 'win32') return shortcut === undefined ? 'missing-shortcut' : 'ready';
+  // macOS always has osascript; terminal-notifier only improves the toast.
+  if (platform === 'darwin') return 'ready';
+  return 'unsupported-platform';
+}
+
 // The installer writes "DeepSeek-Harness.lnk" into the per-user Start Menu, but a
 // manual or older install may put either spelling in either location, so both are
 // enumerated rather than probed by exact path. notify.ps1 looks the shortcut up
@@ -479,8 +609,9 @@ function focusScript() {
   var label = (window.__dshNotifyTab || (window.__dshNotifyTab = String(Math.random()).slice(2))) + '@' + location.pathname;
   var timer = 0;
   function watch() { return document.visibilityState === 'visible' && document.hasFocus(); }
-  function report() { fetch(endpoint + '?on=' + encodeURIComponent(label), { cache: 'no-store' }).catch(function () {}); }
-  function leave() { fetch(endpoint + '?off=' + encodeURIComponent(label), { cache: 'no-store', keepalive: true }).catch(function () {}); }
+  var gate = { 'x-dsh-notify': '1' };
+  function report() { fetch(endpoint + '?on=' + encodeURIComponent(label), { cache: 'no-store', headers: gate }).catch(function () {}); }
+  function leave() { fetch(endpoint + '?off=' + encodeURIComponent(label), { cache: 'no-store', keepalive: true, headers: gate }).catch(function () {}); }
   function sync() {
     clearInterval(timer);
     if (watch()) { report(); timer = setInterval(report, 2000); }

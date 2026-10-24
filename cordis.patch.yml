@@ -1,4 +1,5 @@
-# Registers the "task finished / needs you" Windows notification for DSH.
+# Registers the "task finished / needs you" desktop notification for DSH
+# (Windows toast, macOS notification).
 # Everything tunable lives in the `dsh-notify` row's `config` in the profile
 # patch, which survives DSH upgrades. The same values are editable from
 # Settings → Plugins → this plugin; both write this section.
