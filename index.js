@@ -98,7 +98,7 @@ export function apply(ctx, config = {}) {
   const turns = new Map();
   /** Sessions with a turn in flight, so a finished one can spot the others. */
   const running = new Set();
-  /** Question timers keyed by session id. */
+  /** Pending ask_user_question notifications keyed by session id. */
   const questions = new Map();
   /** Focus heartbeats from browser tabs: an opaque tab label -> last report. */
   const focusReports = new Map();
@@ -290,9 +290,16 @@ export function apply(ctx, config = {}) {
       running.add(session.id);
       return;
     }
+    if (event.type === 'tool/call') {
+      if (event.data?.name === 'ask_user_question') onQuestionToolCall(session, event.data);
+      return;
+    }
     if (event.type === 'tool/result') {
-      // Any tool result settles the question this toast announced.
-      clearQuestion(session.id);
+      const pending = questions.get(session.id);
+      const callId = event.data?.message?.toolCallId;
+      if (pending?.callId !== callId) return;
+      if (event.data?.error?.code === 'TOOL_OUTCOME_UNKNOWN' || isPendingQuestionResult(event.data?.message?.content)) return;
+      clearQuestion(session.id, callId);
       return;
     }
     if (event.type !== 'turn/end') return;
@@ -336,42 +343,54 @@ export function apply(ctx, config = {}) {
     return false;
   }
 
-  function clearQuestion(sessionId) {
-    const timer = questions.get(sessionId);
-    if (timer === undefined) return;
-    clearTimeout(timer);
+  function clearQuestion(sessionId, callId) {
+    const pending = questions.get(sessionId);
+    if (pending === undefined || (callId !== undefined && pending.callId !== callId)) return;
+    clearTimeout(pending.timer);
     questions.delete(sessionId);
   }
 
   // ---- questions -----------------------------------------------------------
 
-  // While a question is pending the agent is blocked, so this listener holds
-  // the waterfall open and rings when nobody answered by the deadline. It
-  // raises a toast and never answers: the shipped Web answerer stays the only
-  // responder, so answering in this window would be ambiguous. Once the delay
-  // elapses the listener steps aside, which lets that answerer take the request
-  // as usual; by then the toast is up and the user is on their way back.
-  if (ready) ctx.on('user-questions/request', (request, next) => {
-    const agent = request?.agent;
-    if (!options.notifyQuestions || agent === undefined) return next();
-    const session = agent.session;
-    if (session === undefined) return next();
-    if (options.skipWhenFocused && clientFocused()) return next();
-    if (options.skipWhenOthersRunning && anyOtherRunning(session.id)) return next();
+  // The session feed records the tool call before its question is answered.
+  // Watching it leaves DSH's answerer path untouched.
+  function onQuestionToolCall(session, call) {
+    if (!options.notifyQuestions) return;
+    if (options.skipWhenFocused && clientFocused()) return;
+    if (options.skipWhenOthersRunning && anyOtherRunning(session.id)) return;
+    let callArguments;
+    try {
+      callArguments = JSON.parse(call.arguments);
+    } catch {
+      return;
+    }
+    const promptQuestions = callArguments?.questions;
+    if (!Array.isArray(promptQuestions) || promptQuestions.length === 0) return;
     // A plan review is the one question with its own approval UI intent; it is
     // answered on screen, so a toast would arrive too late to help.
-    if (!options.notifyPlanReviews && request.questions?.some(question => question?.intent?.kind === 'plan-review')) return next();
-    const body = questionSummary(request.questions);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        questions.delete(session.id);
-        if (!request.signal?.aborted) notify(options.titleQuestion, body, soundFor('question'));
-        resolve(next());
-      }, options.questionDelayMs);
-      timer.unref?.();
-      questions.set(session.id, timer);
-    });
-  });
+    if (!options.notifyPlanReviews && promptQuestions.some(question => question?.intent?.kind === 'plan-review')) return;
+    if (typeof call.callId !== 'string' || call.callId.length === 0) return;
+
+    clearQuestion(session.id);
+    const body = questionSummary(promptQuestions);
+    const timer = setTimeout(() => {
+      if (questions.get(session.id)?.callId !== call.callId) return;
+      questions.delete(session.id);
+      notify(options.titleQuestion, body, soundFor('question'));
+    }, options.questionDelayMs);
+    timer.unref?.();
+    questions.set(session.id, { callId: call.callId, timer });
+  }
+
+  function isPendingQuestionResult(content) {
+    const text = Array.isArray(content) ? content.find(block => block?.type === 'text')?.text : undefined;
+    if (typeof text !== 'string') return false;
+    try {
+      return JSON.parse(text)?.pending === true;
+    } catch {
+      return false;
+    }
+  }
 
   // ---- settings page support -----------------------------------------------
 

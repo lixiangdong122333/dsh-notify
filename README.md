@@ -84,7 +84,7 @@ The plugin's own routes are loopback-only and require its `x-dsh-notify: 1` head
 The plugin is a Cordis plugin: it exports `apply(ctx)` and registers listeners on the host context.
 
 * **Turns** — DSH commits a `turn/end` event to each session's log. The plugin follows that feed and raises a toast when a turn ends, skipping subagent sessions and turns you cancelled yourself.
-* **Questions** — a `user-questions/request` reaches the plugin before the web answerer sees it. The plugin holds the request, and once `questionDelayMs` passes without an answer it raises the toast and steps aside, so the normal answerer takes over as usual. The plugin never answers, and never interferes with the on-screen question card.
+* **Questions** — the plugin watches committed `tool/call` session events and handles only calls named `ask_user_question`, reading the question from the tool arguments. It raises a toast after `questionDelayMs`; an answered call cancels the pending toast, while a timed-out question that remains answerable does not. The plugin does not intercept the tool call or answer for you.
 * **Focus** — a small script served by the host reports tab visibility and focus back to the host, which is the only reliable signal for "the user can already see this".
 * **Delivery** — on Windows `notify.ps1` raises the toast through WinRT as the app's Start Menu shortcut. Windows resolves a toast's application name from the `AppUserModelId` registry entry, not from the toast XML, so the script (re)writes that entry before each send. On macOS the Host spawns `terminal-notifier` when it is installed, and otherwise `osascript` (`display notification`); both are ordinary processes, so the plugin has no native dependency. macOS notifications show under the helper's own name (terminal-notifier or Script Editor), which also means the user grants notifications to that name.
 
@@ -110,9 +110,9 @@ powershell -ExecutionPolicy Bypass -File test-toast.ps1
 Pushing a `v*` tag stages that version on npm; a normal push only runs the tests.
 
 ```bash
-npm version 1.3.0 --no-git-tag-version
-git commit -am "Release 1.3.0"
-git tag v1.3.0
+npm version 1.3.1 --no-git-tag-version
+git commit -am "Release 1.3.1"
+git tag v1.3.1
 git push origin main --tags
 ```
 

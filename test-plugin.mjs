@@ -189,31 +189,81 @@ ctx.emit('session/event', child, { type: 'turn/end', time: Date.now(), data: { r
 await new Promise(resolve => setTimeout(resolve, 30));
 check('subagent session is ignored', spawned.length === 0, `spawned=${spawned.length}`);
 
-// --- question raises a toast after the delay --------------------------------
+// --- ask_user_question tool calls raise a toast after the delay --------------
 spawned.length = 0;
 const askSession = makeSession({ id: 'session-ask', cwd: 'C:\\work' });
-const agent = { id: 'session-ask', session: askSession, status: 'running' };
-ctx.emit('agent/created', { agent });
-const questionPromise = ctx.listeners.get('user-questions/request')[0](
-  { agent, questions: [{ id: 'q1', header: '确认', question: '要现在重启 DSH 吗？', options: [] }], signal: new AbortController().signal },
-  () => Promise.resolve({ answers: [] }),
-);
+ctx.emit('agent/created', { agent: { id: askSession.id, session: askSession, status: 'running' } });
+ctx.emit('session/event', askSession, {
+  type: 'tool/call',
+  time: Date.now(),
+  data: {
+    turn: 1,
+    step: 1,
+    callId: 'call-question-1',
+    name: 'ask_user_question',
+    arguments: JSON.stringify({ questions: [{ id: 'q1', header: '确认', question: '要现在重启 DSH 吗？', options: [] }] }),
+  },
+});
 await new Promise(resolve => setTimeout(resolve, 60));
 check('pending question raises a toast', spawned.length === 1, `spawned=${spawned.length}`);
 const questionBody = spawned[0]?.args?.[spawned[0].args.indexOf('-Body') + 1] ?? '';
 check('question toast names the question', questionBody.includes('重启'), questionBody);
-const answered = await Promise.race([questionPromise, new Promise(resolve => setTimeout(() => resolve('pending'), 300))]);
-check('question listener steps aside after the delay', answered !== 'pending');
+
+// A completed result cancels only its own pending toast. Unknown and pending
+// outcomes remain answerable and must still notify.
+spawned.length = 0;
+const answeredCtx = makeContext();
+apply(answeredCtx, { questionDelayMs: 30 });
+const answeredSession = makeSession({ id: 'session-answered', cwd: 'C:\\work' });
+answeredCtx.emit('agent/created', { agent: { id: answeredSession.id, session: answeredSession, status: 'running' } });
+answeredCtx.emit('session/event', answeredSession, {
+  type: 'tool/call', time: Date.now(),
+  data: { turn: 1, step: 1, callId: 'call-answered', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q1', question: '回答了吗？' }] }) },
+});
+answeredCtx.emit('session/event', answeredSession, {
+  type: 'tool/result', time: Date.now(),
+  data: { turn: 1, step: 1, message: { toolCallId: 'call-answered', content: [{ type: 'text', text: JSON.stringify({ answers: [] }) }] } },
+});
+await new Promise(resolve => setTimeout(resolve, 50));
+check('answered question cancels its toast', spawned.length === 0, `spawned=${spawned.length}`);
+
+spawned.length = 0;
+const pendingCtx = makeContext();
+apply(pendingCtx, { questionDelayMs: 5 });
+const pendingSession = makeSession({ id: 'session-pending', cwd: 'C:\\work' });
+pendingCtx.emit('agent/created', { agent: { id: pendingSession.id, session: pendingSession, status: 'running' } });
+pendingCtx.emit('session/event', pendingSession, {
+  type: 'tool/call', time: Date.now(),
+  data: { turn: 1, step: 1, callId: 'call-pending', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q1', question: '仍待回答？' }] }) },
+});
+pendingCtx.emit('session/event', pendingSession, {
+  type: 'tool/result', time: Date.now(),
+  data: { turn: 1, step: 1, message: { toolCallId: 'call-unrelated', content: [{ type: 'text', text: 'done' }] } },
+});
+pendingCtx.emit('session/event', pendingSession, {
+  type: 'tool/result', time: Date.now(),
+  data: { turn: 1, step: 1, message: { toolCallId: 'call-pending', content: [{ type: 'text', text: JSON.stringify({ pending: true }) }] } },
+});
+await new Promise(resolve => setTimeout(resolve, 40));
+check('pending tool result keeps the question toast', spawned.length === 1, `spawned=${spawned.length}`);
 
 // --- plan reviews stay quiet by default -------------------------------------
 spawned.length = 0;
-const planRequest = ctx.listeners.get('user-questions/request')[0](
-  { agent, questions: [{ id: 'q2', question: '批准这个计划吗？', intent: { kind: 'plan-review', approve: '批准', detail: '计划正文' } }], signal: new AbortController().signal },
-  () => Promise.resolve({ answers: [] }),
-);
+ctx.emit('session/event', askSession, {
+  type: 'tool/call', time: Date.now(),
+  data: { turn: 1, step: 1, callId: 'call-plan', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q2', question: '批准这个计划吗？', intent: { kind: 'plan-review', approve: '批准', detail: '计划正文' } }] }) },
+});
 await new Promise(resolve => setTimeout(resolve, 60));
 check('plan review is not announced', spawned.length === 0, `spawned=${spawned.length}`);
-check('plan review falls through to the answerer at once', (await planRequest)?.answers !== undefined);
+
+spawned.length = 0;
+ctx.emit('session/event', askSession, {
+  type: 'tool/call', time: Date.now(),
+  data: { turn: 1, step: 1, callId: 'call-other-tool', name: 'bash', arguments: '{}' },
+});
+await new Promise(resolve => setTimeout(resolve, 30));
+check('other tool calls do not raise a question toast', spawned.length === 0, `spawned=${spawned.length}`);
+check('question notifications do not hook user-questions/request', !ctx.listeners.has('user-questions/request'));
 
 // --- focus gating -----------------------------------------------------------
 spawned.length = 0;
@@ -228,9 +278,13 @@ await new Promise((resolve) => {
 const focusedSession = makeSession({ id: 'session-focused', cwd: 'C:\\work', events: [assistantMessage('done')] });
 focused.emit('agent/created', { agent: { id: 'session-focused', session: focusedSession, status: 'idle' } });
 focused.emit('session/event', focusedSession, { type: 'turn/start', time: Date.now() });
+focused.emit('session/event', focusedSession, {
+  type: 'tool/call', time: Date.now(),
+  data: { turn: 1, step: 1, callId: 'call-focused', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q1', question: '前台问题？' }] }) },
+});
 focused.emit('session/event', focusedSession, { type: 'turn/end', time: Date.now(), data: { reason: { kind: 'completed' } } });
 await new Promise(resolve => setTimeout(resolve, 30));
-check('focused tab suppresses the toast', spawned.length === 0, `spawned=${spawned.length}`);
+check('focused tab suppresses turn and question toasts', spawned.length === 0, `spawned=${spawned.length}`);
 
 const focusScript = focused.routes.get('/dsh-notify-focus.js');
 let scriptText = '';

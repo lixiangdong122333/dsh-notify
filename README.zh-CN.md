@@ -82,7 +82,7 @@ dsh plugin --profile web add github:lixiangdong122333/dsh-notify
 
 **任务结束** — DSH 会把 `turn/end` 事件写进每个会话的日志。插件跟着这条流走，在任务结束时弹通知，同时跳过子代理会话和你自己手动取消的那一次。
 
-**提问** — `user-questions/request` 到达插件的时机比网页端应答器更早。插件先把请求扣住；如果过了 `questionDelayMs` 还是没人回答，就弹通知然后让位，由正常的应答器接管。**插件从不替你回答**，也不会干扰屏幕上那张提问卡片。
+**提问** — 插件监听会话日志里的 `tool/call`，只处理工具名为 `ask_user_question` 的调用，并从工具参数读取问题。超过 `questionDelayMs` 仍未得到工具结果时弹出通知；已回答的问题会取消待发通知，仍可回答的超时结果不会取消。插件不拦截工具调用，也不替你回答。
 
 **焦点判断** — 宿主提供的一个小脚本把标签页的可见性和焦点状态报回宿主。要判断「用户现在能不能看到这个」，这是唯一可靠的信号。
 
@@ -110,9 +110,9 @@ powershell -ExecutionPolicy Bypass -File test-toast.ps1
 推送 `v*` 标签会把那个版本暂存到 npm，普通推送只跑测试。
 
 ```bash
-npm version 1.3.0 --no-git-tag-version
-git commit -am "Release 1.3.0"      # 只用 -am 会漏掉新文件，有新增文件时改成 git add -A
-git tag v1.3.0
+npm version 1.3.1 --no-git-tag-version
+git commit -am "Release 1.3.1"      # 只用 -am 会漏掉新文件，有新增文件时改成 git add -A
+git tag v1.3.1
 git push origin main --tags
 ```
 

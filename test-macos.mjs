@@ -4,6 +4,7 @@
 // including the two failure modes that matter for a shell-free spawn (a helper
 // that is not installed, and text that would break the AppleScript literal).
 import { findAppBundle, macToastPlan, appBundlePath, appleScriptString, resolveTerminalNotifier, MAC_SOUND } from './macos.js';
+import { delimiter, join } from 'node:path';
 
 const results = [];
 function check(name, condition, detail = '') {
@@ -13,27 +14,27 @@ function check(name, condition, detail = '') {
 // --- finding terminal-notifier ----------------------------------------------
 check(
   'terminal-notifier is not found in an empty environment',
-  resolveTerminalNotifier({ env: { PATH: '/nonexistent' }, exists: () => false }) === undefined,
+  resolveTerminalNotifier({ env: { PATH: join('/nonexistent', 'bin') }, exists: () => false }) === undefined,
 );
 check(
   'terminal-notifier is found in a Homebrew bin directory',
-  resolveTerminalNotifier({ env: { PATH: '/nonexistent' }, exists: path => path === '/opt/homebrew/bin/terminal-notifier' })
-    === '/opt/homebrew/bin/terminal-notifier',
+  resolveTerminalNotifier({ env: { PATH: join('/nonexistent', 'bin') }, exists: path => path === join('/opt/homebrew/bin', 'terminal-notifier') })
+    === join('/opt/homebrew/bin', 'terminal-notifier'),
 );
 check(
   'terminal-notifier is found through PATH as a fallback',
-  resolveTerminalNotifier({ env: { PATH: '/custom/bin:/usr/bin' }, exists: path => path === '/custom/bin/terminal-notifier' })
-    === '/custom/bin/terminal-notifier',
+  resolveTerminalNotifier({ env: { PATH: ['/custom/bin', '/usr/bin'].join(delimiter) }, exists: path => path === join('/custom/bin', 'terminal-notifier') })
+    === join('/custom/bin', 'terminal-notifier'),
 );
 check(
   'a throwing exists() does not break the search',
   resolveTerminalNotifier({
-    env: { PATH: '/broken:/opt/homebrew/bin' },
+    env: { PATH: ['/broken', '/opt/homebrew/bin'].join(delimiter) },
     exists: path => {
-      if (path.startsWith('/broken')) throw new Error('denied');
-      return path === '/opt/homebrew/bin/terminal-notifier';
+      if (path.startsWith(join('/broken', ''))) throw new Error('denied');
+      return path === join('/opt/homebrew/bin', 'terminal-notifier');
     },
-  }) === '/opt/homebrew/bin/terminal-notifier',
+  }) === join('/opt/homebrew/bin', 'terminal-notifier'),
 );
 
 // --- the app bundle to activate ---------------------------------------------
@@ -68,8 +69,8 @@ check(
     execPath: '/usr/local/bin/node',
     dirs: ['/Applications'],
     readdir: path => (path === '/Applications' ? ['Safari.app', 'DeepSeek-Harness.app'] : []),
-    exists: path => path === '/Applications/DeepSeek-Harness.app',
-  }) === '/Applications/DeepSeek-Harness.app',
+    exists: path => path === join('/Applications', 'DeepSeek-Harness.app'),
+  }) === join('/Applications', 'DeepSeek-Harness.app'),
 );
 check(
   'an unreadable Applications folder is not fatal',

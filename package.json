@@ -1,6 +1,6 @@
 {
   "name": "@cmwl1231/dsh-notify",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Windows toast and macOS notifications when a DSH task finishes or the agent needs you; click to return to DeepSeek-Harness, with a settings page inside DSH",
   "type": "module",
   "license": "MIT",
