@@ -19,6 +19,11 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
+    // Every plugin route is loopback-only and requires this header: a
+    // cross-origin page cannot add a non-safelisted header without a preflight
+    // the Host never answers, so the header is the CSRF gate.
+    const GATE_HEADERS = { 'x-dsh-notify': '1' };
+
     const SCHEMA = {
       onTurnEnd: { kind: 'switch', label: ['Notify when a task finishes', '任务结束时通知'] },
       notifyEndKinds: {
@@ -84,6 +89,60 @@ window.__ModuleLoader__.load({
     /** Pick the string for the page's current language. */
     function pick(pair, lang) {
       return lang === 'zh' ? pair[1] : pair[0];
+    }
+
+    /** Localized line for the write state the form is in. */
+    function saveStatusText(state, lang) {
+      if (state === 'saving') return pick(['Saving…', '正在保存…'], lang);
+      if (state === 'saved') return pick(['Saved', '已保存'], lang);
+      const detail = String(state).replace(/^error:\s*/u, '');
+      return `${pick(['Could not save', '保存失败'], lang)}: ${detail}`;
+    }
+
+    /** Human name for `process.platform`, for the "cannot notify here" note. */
+    function platformName(platform) {
+      if (platform === 'darwin') return 'macOS';
+      if (platform === 'win32') return 'Windows';
+      if (platform === 'linux') return 'Linux';
+      return platform ? String(platform) : 'this system';
+    }
+
+    /**
+     * Read one JSON answer without assuming there is a body.
+     *
+     * A route that was never registered answers 404 with an empty body, and
+     * `response.json()` then reports only "Unexpected end of JSON input" — the
+     * message this page used to show on a Host whose delivery half is off. The
+     * status and any body are folded into the error instead.
+     */
+    async function readJson(response) {
+      let text = '';
+      try {
+        text = await response.text();
+      } catch (error) {
+        throw new Error(`the response body could not be read: ${String(error)}`);
+      }
+      if (!response.ok) {
+        // Some routes fail on purpose and still answer JSON (`/dsh-notify/test`
+        // does when the toast cannot be raised), so the Host's own message is
+        // more useful than the raw body.
+        let detail;
+        try {
+          const parsed = JSON.parse(text);
+          detail = parsed?.detail ?? parsed?.error;
+        } catch {
+          // Not JSON: fall through to the status line.
+        }
+        throw new Error(detail
+          ? String(detail)
+          : `HTTP ${response.status}${text ? `: ${text.slice(0, 300)}` : ''}`);
+      }
+      if (!text) throw new Error('the Host answered with an empty body');
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`the Host answered with something that is not JSON: ${text.slice(0, 300)}`);
+      }
     }
 
     // ---- styles --------------------------------------------------------------
@@ -198,7 +257,7 @@ window.__ModuleLoader__.load({
 }
 `;
 
-    function Switch({ checked, onChange, label }) {
+    function Switch({ checked, onChange, label, disabled }) {
       // The on/off colour is an inline literal, not a var() and not an attribute
       // selector. Both of those failed to take effect here, and the switch has to
       // be readable whatever the stylesheet does.
@@ -208,9 +267,12 @@ window.__ModuleLoader__.load({
         'aria-checked': checked,
         'aria-label': label,
         className: 'dsh-notify-switch',
+        disabled,
         style: {
           ...S.switch,
           background: checked ? '#3b82f6' : 'rgba(128,128,128,0.38)',
+          opacity: disabled ? 0.6 : 1,
+          cursor: disabled ? 'default' : 'pointer',
         },
         onClick: () => onChange(!checked),
       }, h('span', {
@@ -219,87 +281,79 @@ window.__ModuleLoader__.load({
       }));
     }
 
-    function Row({ label, hint, children }) {
+    function Row({ label, hint, disabled, children }) {
       return h('div', { className: 'dsh-notify-row', style: S.row },
         h('div', { style: S.rowText },
           h('span', { className: 'dsh-notify-label', style: S.label }, label),
           hint ? h('span', { className: 'dsh-notify-hint', style: S.hint }, hint) : null,
         ),
-        h('div', { style: S.control }, children),
+        h('div', { style: { ...S.control, opacity: disabled ? 0.6 : 1 } }, children),
       );
     }
 
     /** One field, dispatched by the schema entry's `kind`. */
-    function Field({ name, spec, value, lang, onChange }) {
+    function Field({ name, spec, value, lang, onChange, disabled }) {
       const label = pick(spec.label, lang);
       const hint = spec.hint ? pick(spec.hint, lang) : '';
+      const row = children => h(Row, { label, hint, disabled }, children);
 
       if (spec.kind === 'switch') {
-        return h(Row, { label, hint },
-          h(Switch, { checked: value !== false, label, onChange }),
-        );
+        return row(h(Switch, { checked: value !== false, label, onChange, disabled }));
       }
       if (spec.kind === 'number') {
-        return h(Row, { label, hint },
-          h('input', {
-            type: 'number', className: 'dsh-notify-input', style: S.input, value: value ?? 0,
-            min: spec.min, max: spec.max, step: spec.step, 'aria-label': label,
-            onChange: event => {
-              const next = Number(event.target.value);
-              onChange(Number.isFinite(next) ? next : 0);
-            },
-          }),
-        );
+        return row(h('input', {
+          type: 'number', className: 'dsh-notify-input', style: S.input, value: value ?? 0,
+          min: spec.min, max: spec.max, step: spec.step, 'aria-label': label, disabled,
+          onChange: event => {
+            const next = Number(event.target.value);
+            onChange(Number.isFinite(next) ? next : 0);
+          },
+        }));
       }
       if (spec.kind === 'text') {
-        return h(Row, { label, hint },
-          h('input', {
-            type: 'text', className: 'dsh-notify-text', style: S.textInput,
-            value: value ?? '', 'aria-label': label,
-            onChange: event => onChange(event.target.value),
-          }),
-        );
+        return row(h('input', {
+          type: 'text', className: 'dsh-notify-text', style: S.textInput,
+          value: value ?? '', 'aria-label': label, disabled,
+          onChange: event => onChange(event.target.value),
+        }));
       }
       if (spec.kind === 'select') {
-        return h(Row, { label, hint },
-          h('select', {
-            className: 'dsh-notify-select', style: S.select,
-            value: value ?? spec.choices[0].value, 'aria-label': label,
-            onChange: event => onChange(event.target.value),
-          }, spec.choices.map(choice =>
-            h('option', {
-              key: choice.value, value: choice.value,
-            }, pick(choice.label, lang)),
-          )),
-        );
+        return row(h('select', {
+          className: 'dsh-notify-select', style: S.select,
+          value: value ?? spec.choices[0].value, 'aria-label': label, disabled,
+          onChange: event => onChange(event.target.value),
+        }, spec.choices.map(choice =>
+          h('option', {
+            key: choice.value, value: choice.value,
+          }, pick(choice.label, lang)),
+        )));
       }
       if (spec.kind === 'multi') {
         const chosen = Array.isArray(value) ? value : [];
-        return h(Row, { label, hint },
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'flex-end' } },
-            spec.choices.map(choice => {
-              const on = chosen.includes(choice.value);
-              return h('button', {
-                key: choice.value, type: 'button',
-                'aria-pressed': on,
-                className: 'dsh-notify-chip',
-                // Literal colours only. The attribute-selector version of this did
-                // not visibly change the chip, so selection is drawn inline.
-                style: {
-                  padding: '5px 12px', fontSize: '12px', cursor: 'pointer',
-                  borderRadius: '999px', fontWeight: on ? 600 : 400,
-                  color: on ? '#ffffff' : '#c8c8c8',
-                  background: on ? '#3b82f6' : 'rgba(128,128,128,0.22)',
-                  border: `1px solid ${on ? '#3b82f6' : 'rgba(128,128,128,0.35)'}`,
-                  transition: 'background 120ms ease, border-color 120ms ease',
-                },
-                onClick: () => onChange(on
-                  ? chosen.filter(item => item !== choice.value)
-                  : [...chosen, choice.value]),
-              }, pick(choice.label, lang));
-            }),
-          ),
-        );
+        return row(h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'flex-end' } },
+          spec.choices.map(choice => {
+            const on = chosen.includes(choice.value);
+            return h('button', {
+              key: choice.value, type: 'button',
+              'aria-pressed': on,
+              className: 'dsh-notify-chip',
+              disabled,
+              // Literal colours only. The attribute-selector version of this did
+              // not visibly change the chip, so selection is drawn inline.
+              style: {
+                padding: '5px 12px', fontSize: '12px', cursor: disabled ? 'default' : 'pointer',
+                borderRadius: '999px', fontWeight: on ? 600 : 400,
+                color: on ? '#ffffff' : '#c8c8c8',
+                background: on ? '#3b82f6' : 'rgba(128,128,128,0.22)',
+                border: `1px solid ${on ? '#3b82f6' : 'rgba(128,128,128,0.35)'}`,
+                transition: 'background 120ms ease, border-color 120ms ease',
+              },
+              onClick: () => onChange(on
+                ? chosen.filter(item => item !== choice.value)
+                : [...chosen, choice.value]),
+            }, pick(choice.label, lang));
+          }),
+        ));
       }
       return null;
     }
@@ -320,15 +374,26 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ status: 'loading' });
       const [draft, setDraft] = React.useState(null);
       const [pushState, setPushState] = React.useState('idle');
+      const writeId = React.useRef(0);
 
       React.useEffect(() => {
         let live = true;
-        fetch('/dsh-notify/config', { cache: 'no-store' })
-          .then(response => response.json())
+        fetch('/dsh-notify/config', { cache: 'no-store', headers: GATE_HEADERS })
+          .then(readJson)
           .then(body => {
             if (!live) return;
             if (!body.ok) throw new Error(body.detail ?? 'failed');
-            setState({ status: 'ready', writable: body.writable !== false });
+            setState({
+              status: 'ready',
+              writable: body.writable !== false,
+              // The Host says whether it can raise a toast at all; `delivery`
+              // distinguishes "wrong platform" from "the shortcut is missing".
+              supported: body.supported !== false,
+              delivery: body.delivery,
+              platform: body.platform,
+              backend: body.backend,
+              clickToFocus: body.clickToFocus === true,
+            });
             setDraft({ ...body.config });
           })
           .catch(error => {
@@ -342,50 +407,124 @@ window.__ModuleLoader__.load({
       }
       if (state.status !== 'ready' || draft === null) {
         return h('div', { style: S.wrap },
-          h('p', { style: S.note }, pick(
+          h('p', { className: 'dsh-notify-note', style: S.note }, pick(
             ['The plugin could not read its settings document.', '插件无法读取设置文档。'],
             lang,
           )),
           h('p', { style: S.status }, String(state.detail ?? '')),
+          h('p', { className: 'dsh-notify-hint', style: S.hint }, pick(
+            [
+              'The Host half of this plugin is not answering. Restart DeepSeek-Harness so the plugin is loaded, then open this page again.',
+              '插件的 Host 部分没有响应。重启 DeepSeek-Harness 让插件重新加载，然后再打开这个页面。',
+            ],
+            lang,
+          )),
         );
       }
 
       const set = (name, value) => {
+        // The form is rendered disabled in a read-only profile, but a keyboard
+        // path or a stale handler must not reach the write route either.
+        if (state.writable === false) return;
         const next = { ...draft, [name]: value };
+        const requestId = writeId.current + 1;
+        writeId.current = requestId;
         setDraft(next);
         setPushState('saving');
         // Fire-and-forget writes would hide a rejected value, so the outcome is
-        // reported next to the test button.
+        // reported under the form.
         fetch('/dsh-notify/config', {
           method: 'POST',
           cache: 'no-store',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...GATE_HEADERS },
           body: JSON.stringify({ config: next }),
         })
-          .then(response => response.json())
+          .then(readJson)
           .then(body => {
             if (!body.ok) throw new Error(body.detail ?? 'failed');
+            // `ok` means the live options accepted the value; persistence is
+            // reported separately, and a failed write must not look saved.
+            if (body.persisted?.error) throw new Error(body.persisted.error);
+            // The Host normalizes a write (clamps a length, drops an unknown
+            // enum value), so show what it actually stored — but only for the
+            // newest write, or a slow answer could revert a later edit.
+            if (requestId === writeId.current) setDraft({ ...body.config });
             setPushState('saved');
           })
           .catch(error => {
             setPushState(`error: ${String(error.message ?? error)}`);
             // Put the stored value back rather than leaving an optimistic one.
-            fetch('/dsh-notify/config', { cache: 'no-store' })
-              .then(response => response.json())
+            fetch('/dsh-notify/config', { cache: 'no-store', headers: GATE_HEADERS })
+              .then(readJson)
               .then(body => { if (body.ok) setDraft({ ...body.config }); })
               .catch(() => {});
           });
       };
 
       const readOnly = state.writable === false;
+      const supported = state.supported !== false;
+      const platform = platformName(state.platform);
+      const onMac = state.platform === 'darwin';
+
+      // Everything that explains why the page is showing settings no toast will
+      // read. Delivery and storage are separate conditions, so they get separate
+      // notes: a Host can be unable to notify yet still save, or the reverse.
+      const notices = [];
+      if (!supported) {
+        notices.push(state.delivery === 'missing-shortcut'
+          ? pick(
+            [
+              'Notifications are off because the DeepSeek-Harness Start Menu shortcut was not found. Reinstall the app, or recreate its shortcut, then restart DeepSeek-Harness.',
+              '没有找到 DeepSeek-Harness 的开始菜单快捷方式，通知处于关闭状态。重新安装应用或重建快捷方式，然后重启 DeepSeek-Harness 即可恢复。',
+            ],
+            lang,
+          )
+          : pick(
+            [
+              `Desktop notifications are only available on Windows and macOS. This Host runs on ${platform}, so no toast will be raised here.`,
+              `桌面通知只在 Windows 和 macOS 上生效。当前系统是 ${platform}，所以这里不会弹出通知。`,
+            ],
+            lang,
+          ));
+      }
+      // On macOS the sender matters: only terminal-notifier can reopen DSH when
+      // the notification is clicked, and Script Editor needs its own permission.
+      if (supported && onMac) {
+        notices.push(state.backend === 'terminal-notifier'
+          ? pick(
+            state.clickToFocus
+              ? [
+                'Notifications are delivered by terminal-notifier; clicking one brings DeepSeek-Harness back to the front.',
+                '通知通过 terminal-notifier 发送；点击通知会回到 DeepSeek-Harness。',
+              ]
+              : [
+                'Notifications are delivered by terminal-notifier, but the app bundle could not be located, so clicking one will not return to DeepSeek-Harness.',
+                '通知通过 terminal-notifier 发送，但没有定位到 DeepSeek-Harness 应用，点击通知不会回到应用。',
+              ],
+            lang,
+          )
+          : pick(
+            [
+              'Notifications are delivered by the system script runner (osascript) and appear as Script Editor. If nothing shows up, allow Script Editor in System Settings → Notifications. Install terminal-notifier (brew install terminal-notifier) and restart DeepSeek-Harness to make clicking a notification return here.',
+              '通知由系统自带的 osascript 发送，会显示为「脚本编辑器」。若没有看到通知，请在 系统设置 → 通知 中允许「脚本编辑器」。安装 terminal-notifier（brew install terminal-notifier）并重启 DeepSeek-Harness 后，点击通知还可以回到这里。',
+            ],
+            lang,
+          ));
+      }
+      if (readOnly) {
+        notices.push(pick(
+          [
+            'These values are read-only: there is no profile patch here to save them to.',
+            '这些设置是只读的：这里没有可写入的 profile patch。',
+          ],
+          lang,
+        ));
+      }
 
       return h('div', { className: 'dsh-notify', style: S.wrap },
-        readOnly
-          ? h('p', { className: 'dsh-notify-note', style: S.note }, pick(
-            ['Settings are read-only in this profile.', '当前 profile 的设置是只读的。'],
-            lang,
-          ))
-          : null,
+        notices.map((text, index) => h('p', {
+          key: index, className: 'dsh-notify-note', style: S.note,
+        }, text)),
 
         GROUP_TITLES.map(([groupLabel, names], index) => h('div', { key: index, style: S.wrap },
           h('h3', { className: 'dsh-notify-section-title', style: S.sectionTitle }, pick(groupLabel, lang)),
@@ -395,19 +534,29 @@ window.__ModuleLoader__.load({
             spec: SCHEMA[name],
             value: draft[name],
             lang,
+            disabled: readOnly,
             onChange: value => set(name, value),
           })),
         )),
 
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '4px' } },
-          h('button', {
-            type: 'button', className: 'dsh-notify-button', style: S.button, disabled: testing,
-            onClick: onTest, 'aria-busy': testing,
-          }, testing
-            ? pick(['Sending…', '正在发送…'], lang)
-            : pick(['Send a test notification', '发送测试通知'], lang)),
-          testResult ? h('span', { style: S.status }, testResult) : null,
-        ),
+        // No test button when the Host cannot raise a toast: offering one would
+        // only produce a second "failed" line under the note that already
+        // explains why nothing can be sent. The save state stays visible either
+        // way, because a read-write profile can still be edited here.
+        supported || pushState !== 'idle'
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '4px' } },
+            supported
+              ? h('button', {
+                type: 'button', className: 'dsh-notify-button', style: S.button, disabled: testing,
+                onClick: onTest, 'aria-busy': testing,
+              }, testing
+                ? pick(['Sending…', '正在发送…'], lang)
+                : pick(['Send a test notification', '发送测试通知'], lang))
+              : null,
+            supported && testResult ? h('span', { style: S.status }, testResult) : null,
+            pushState === 'idle' ? null : h('span', { style: S.status }, saveStatusText(pushState, lang)),
+          )
+          : null,
       );
     }
 
@@ -455,10 +604,9 @@ window.__ModuleLoader__.load({
         // and the shortcut lookup; the page only asks for one and reports the
         // answer, so a broken install shows up as a failure rather than silence.
         async function sendTest() {
-          const response = await fetch('/dsh-notify/test', { method: 'POST', cache: 'no-store' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const body = await response.json();
-          if (!body.ok) throw new Error(body.detail ?? 'failed');
+          const response = await fetch('/dsh-notify/test', { method: 'POST', cache: 'no-store', headers: GATE_HEADERS });
+          const body = await readJson(response);
+          if (!body.ok) throw new Error(body.detail ?? body.reason ?? 'failed');
           return body;
         }
 

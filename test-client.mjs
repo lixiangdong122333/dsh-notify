@@ -27,14 +27,151 @@ globalThis.window = {
   },
 };
 
-// React is only needed as a namespace at registration time; every hook below is
-// reached from inside a component render, which this suite never performs.
+// A very small React: enough hooks and render recursion to mount the real
+// settings component and let its effects settle. The reported bug was a page
+// that rendered only "could not read settings", so the assertions worth having
+// are about the text this component actually produces for a given Host answer.
+let activeSlot = null;
+let pendingEffects = [];
+let scheduledRender = false;
+let rootElement = null;
+let lastTree = null;
+let componentSlots = new WeakMap();
+
+function sameDeps(previous, next) {
+  if (previous === next) return true;
+  if (!Array.isArray(previous) || !Array.isArray(next) || previous.length !== next.length) return false;
+  return previous.every((value, index) => Object.is(value, next[index]));
+}
+
 const React = {
-  createElement: (type, props, ...children) => ({ type, props, children }),
-  useState: value => [value, () => {}],
-  useEffect: () => {},
+  createElement: (type, props, ...children) => ({
+    type,
+    props: props ?? {},
+    children: children.flat(Infinity),
+  }),
+  useState(initial) {
+    const slot = activeSlot;
+    const index = slot.index++;
+    if (!(index in slot.values)) {
+      slot.values[index] = typeof initial === 'function' ? initial() : initial;
+    }
+    return [slot.values[index], (next) => {
+      slot.values[index] = typeof next === 'function' ? next(slot.values[index]) : next;
+      scheduleRender();
+    }];
+  },
+  useEffect(effect, deps) {
+    const slot = activeSlot;
+    const index = slot.index++;
+    const previous = slot.deps[index];
+    if (previous === undefined || !sameDeps(previous, deps)) {
+      slot.deps[index] = deps === undefined ? null : [...deps];
+      pendingEffects.push(effect);
+    }
+  },
+  useRef(initial) {
+    const slot = activeSlot;
+    const index = slot.index++;
+    if (!(index in slot.values)) slot.values[index] = { current: initial };
+    return slot.values[index];
+  },
   useCallback: fn => fn,
 };
+
+function renderNode(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return null;
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(renderNode);
+  if (typeof node.type === 'function') {
+    const slot = componentSlots.get(node.type) ?? { values: [], deps: [], index: 0 };
+    componentSlots.set(node.type, slot);
+    const previous = activeSlot;
+    activeSlot = slot;
+    slot.index = 0;
+    let output;
+    try {
+      output = node.type({ ...node.props, children: node.children });
+    } finally {
+      activeSlot = previous;
+    }
+    return renderNode(output);
+  }
+  return { type: String(node.type), props: node.props, children: node.children.map(renderNode) };
+}
+
+function renderRoot() {
+  pendingEffects = [];
+  lastTree = renderNode(rootElement);
+  const effects = pendingEffects;
+  pendingEffects = [];
+  for (const effect of effects) effect();
+  return lastTree;
+}
+
+function scheduleRender() {
+  if (scheduledRender) return;
+  scheduledRender = true;
+  setTimeout(() => {
+    scheduledRender = false;
+    if (rootElement !== null) renderRoot();
+  }, 0);
+}
+
+/** Mount one component with fresh hook state. */
+function mount(component) {
+  componentSlots = new WeakMap();
+  activeSlot = null;
+  pendingEffects = [];
+  scheduledRender = false;
+  rootElement = React.createElement(component, {});
+  renderRoot();
+}
+
+/** Let promise callbacks and the renders they schedule run. */
+async function settle() {
+  for (let index = 0; index < 8; index += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+function textOf(node) {
+  if (node === null || node === undefined) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(textOf).join(' ');
+  return textOf(node.children);
+}
+
+function pageText() {
+  return textOf(lastTree).replace(/\s+/gu, ' ').trim();
+}
+
+function hostsOf(node, tag, found = []) {
+  if (node === null || node === undefined) return found;
+  if (Array.isArray(node)) {
+    for (const child of node) hostsOf(child, tag, found);
+    return found;
+  }
+  if (node.type === tag) found.push(node);
+  hostsOf(node.children, tag, found);
+  return found;
+}
+
+/** Replace fetch for one mount; returns the recorded calls. */
+function stubFetch(answer) {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    const reply = (await answer({ url, options })) ?? {};
+    return {
+      ok: reply.ok ?? (reply.status === undefined || reply.status < 400),
+      status: reply.status ?? 200,
+      statusText: reply.statusText ?? '',
+      text: async () => reply.body ?? '',
+    };
+  };
+  return calls;
+}
 // The `styles` Client builtin, which the bundle uses to reach a <select>'s
 // popup list. The factory receives it as a second argument.
 const insertedCss = [];
@@ -199,6 +336,220 @@ check(
   'no component passes a var() inline',
   !/style:\s*\{\s*\.\.\.[^}]*var\(--dsw/.test(source),
 );
+
+// --- what the page renders ---------------------------------------------------
+// The reported symptom first: the Host half is not registered, so the settings
+// route answers 404 with an empty body.
+stubFetch(() => ({ status: 404, body: '' }));
+mount(section.component);
+await settle();
+let text = pageText();
+check('a 404 is reported by status, not as a JSON parse failure',
+  text.includes('HTTP 404'), text.slice(0, 200));
+check('the empty-body JSON error never reaches the page',
+  !text.includes('Unexpected end of JSON input'), text.slice(0, 200));
+check('the page says the Host half is not answering',
+  text.includes('Host 部分没有响应'), text.slice(0, 200));
+
+// The macOS case: the Host answers, and says the delivery half is off.
+const config = {
+  onTurnEnd: true,
+  notifyEndKinds: ['completed', 'error', 'max-tokens'],
+  minTurnMs: 0,
+  notifyQuestions: true,
+  notifyPlanReviews: false,
+  questionDelayMs: 6000,
+  skipWhenFocused: true,
+  skipWhenOthersRunning: true,
+  bodySource: 'answer',
+  bodyLength: 150,
+  sound: 'default',
+  titleCompleted: 'DSH · 任务完成',
+  titleEnded: 'DSH · 任务已结束',
+  titleQuestion: 'DSH · 需要你确认',
+};
+const macAnswer = () => ({
+  body: JSON.stringify({
+    ok: true,
+    writable: false,
+    supported: true,
+    delivery: 'ready',
+    platform: 'darwin',
+    backend: 'osascript',
+    clickToFocus: false,
+    config,
+    patch: null,
+  }),
+});
+
+stubFetch(macAnswer);
+mount(section.component);
+await settle();
+text = pageText();
+check('macOS still gets the settings values',
+  text.includes('任务结束时通知') && text.includes('提示音'), text.slice(0, 260));
+check('macOS is not told notifications are unavailable',
+  !text.includes('不会弹出通知'), text.slice(0, 260));
+check('macOS explains the osascript backend',
+  text.includes('osascript') && text.includes('脚本编辑器'), text.slice(0, 300));
+check('macOS offers the test button',
+  text.includes('发送测试通知'), text.slice(0, 260));
+check('the read-only note replaces the generic error',
+  !text.includes('插件无法读取设置文档') && text.includes('只读'), text.slice(0, 260));
+check('read-only values are rendered disabled',
+  hostsOf(lastTree, 'input').length > 0
+  && hostsOf(lastTree, 'input').every(input => input.props.disabled === true),
+  String(hostsOf(lastTree, 'input').length));
+
+// terminal-notifier is the better macOS backend: it can reopen DSH on click.
+stubFetch(() => ({
+  body: JSON.stringify({
+    ok: true, writable: true, supported: true, delivery: 'ready',
+    platform: 'darwin', backend: 'terminal-notifier', clickToFocus: true,
+    config, patch: '/tmp/profile/cordis.patch.yml',
+  }),
+}));
+mount(section.component);
+await settle();
+text = pageText();
+check('macOS says terminal-notifier brings DSH back on click',
+  text.includes('terminal-notifier') && text.includes('回到 DeepSeek-Harness'), text.slice(0, 300));
+
+// Linux still gets the platform note instead of a JSON error.
+stubFetch(() => ({
+  body: JSON.stringify({
+    ok: true, writable: false, supported: false, delivery: 'unsupported-platform',
+    platform: 'linux', config, patch: null,
+  }),
+}));
+mount(section.component);
+await settle();
+text = pageText();
+check('an unsupported platform is named', text.includes('Linux'), text.slice(0, 260));
+check('an unsupported platform hides the test button',
+  !text.includes('发送测试通知'), text.slice(0, 260));
+
+// Windows, with the shortcut in place: the form is live and saving works.
+const calls = stubFetch(() => ({
+  body: JSON.stringify({
+    ok: true,
+    writable: true,
+    supported: true,
+    delivery: 'ready',
+    platform: 'win32',
+    config,
+    patch: 'C:\\Users\\me\\.dsh\\profiles\\desktop\\cordis.patch.yml',
+  }),
+}));
+mount(section.component);
+await settle();
+text = pageText();
+check('a ready Host shows the test button', text.includes('发送测试通知'), text.slice(0, 260));
+check('a ready Host raises no platform note', !text.includes('只在 Windows 上生效'), text.slice(0, 260));
+check('a ready Host leaves the controls enabled',
+  hostsOf(lastTree, 'input').some(input => !input.props.disabled), String(hostsOf(lastTree, 'input').length));
+const numeric = hostsOf(lastTree, 'input').find(input => input.props.type === 'number');
+if (numeric) numeric.props.onChange({ target: { value: '250' } });
+await settle();
+const posted = calls.find(call => call.options?.method === 'POST');
+check('an edit posts the whole settings document', posted !== undefined,
+  JSON.stringify(calls.map(call => call.options?.method)));
+const postedBody = posted === undefined ? {} : JSON.parse(posted.options.body);
+const numericLabel = numeric?.props['aria-label'];
+check('the posted document carries the edited field and the rest',
+  numericLabel === '最短通知时长（毫秒）'
+  && postedBody.config?.minTurnMs === 250
+  && postedBody.config?.sound === 'default',
+  `${numericLabel} / ${JSON.stringify(postedBody).slice(0, 160)}`);
+check('the write state is reported under the form',
+  pageText().includes('已保存'), pageText().slice(-120));
+check('every settings request carries the route gate header',
+  calls.every(call => call.options?.headers?.['x-dsh-notify'] === '1'),
+  JSON.stringify(calls.map(call => call.options?.headers)));
+const testButton = hostsOf(lastTree, 'button').find(button => button.props.className === 'dsh-notify-button');
+if (testButton) testButton.props.onClick();
+await settle();
+check('the test notification request carries the gate header',
+  calls.some(call => call.url === '/dsh-notify/test'
+    && call.options?.method === 'POST'
+    && call.options?.headers?.['x-dsh-notify'] === '1'),
+  JSON.stringify(calls.map(call => ({ url: call.url, method: call.options?.method }))));
+
+// Windows without the Start Menu shortcut: settings load, delivery stays off.
+stubFetch(() => ({
+  body: JSON.stringify({
+    ok: true,
+    writable: true,
+    supported: false,
+    delivery: 'missing-shortcut',
+    platform: 'win32',
+    config,
+    patch: 'C:\\Users\\me\\.dsh\\profiles\\desktop\\cordis.patch.yml',
+  }),
+}));
+mount(section.component);
+await settle();
+text = pageText();
+check('a missing shortcut gets its own explanation',
+  text.includes('开始菜单快捷方式') && !text.includes('只在 Windows 上生效'), text.slice(0, 260));
+check('a missing shortcut hides the test button too',
+  !text.includes('发送测试通知'), text.slice(0, 260));
+
+// A write the Host accepted live but could not persist must not read as saved.
+stubFetch(({ options }) => ({
+  body: options.method === 'POST'
+    ? JSON.stringify({ ok: true, writable: true, supported: true, delivery: 'ready', platform: 'win32', config, persisted: { error: 'disk is full' } })
+    : JSON.stringify({ ok: true, writable: true, supported: true, delivery: 'ready', platform: 'win32', config }),
+}));
+mount(section.component);
+await settle();
+const unwritableInput = hostsOf(lastTree, 'input').find(input => input.props.type === 'number');
+if (unwritableInput) unwritableInput.props.onChange({ target: { value: '200' } });
+await settle();
+check('a failed persistence is reported instead of saved',
+  pageText().includes('保存失败') && pageText().includes('disk is full'), pageText().slice(-160));
+
+// An older Host predates `supported`/`delivery`/`backend`: it must keep working,
+// because the Client half can be newer than the Host half after a partial
+// upgrade, and it defaults to "delivery available".
+stubFetch(() => ({ body: JSON.stringify({ ok: true, writable: true, config }) }));
+mount(section.component);
+await settle();
+text = pageText();
+check('an older Host without supported still shows the test button',
+  text.includes('发送测试通知'), text.slice(0, 220));
+check('an older Host raises no platform note',
+  !text.includes('只在 Windows 上生效'), text.slice(0, 220));
+
+// A read-only page must not write even if a handler is invoked directly.
+const readOnlyCalls = stubFetch(macAnswer);
+mount(section.component);
+await settle();
+const readOnlyInput = hostsOf(lastTree, 'input').find(input => input.props.type === 'number');
+if (readOnlyInput) readOnlyInput.props.onChange({ target: { value: '300' } });
+await settle();
+check('a read-only page never posts a change',
+  !readOnlyCalls.some(call => call.options?.method === 'POST'),
+  JSON.stringify(readOnlyCalls.map(call => call.options?.method)));
+
+// The remaining read failures get their own wording instead of the old JSON
+// parse message: a 200 with nothing, a 200 that is not JSON, and a 500 whose
+// body carries the Host's own detail.
+stubFetch(() => ({ status: 200, body: '' }));
+mount(section.component);
+await settle();
+check('an empty 200 body is named as such', pageText().includes('empty body'), pageText().slice(0, 200));
+
+stubFetch(() => ({ status: 200, body: '<html>nope</html>' }));
+mount(section.component);
+await settle();
+check('a non-JSON 200 body is named as such', pageText().includes('not JSON'), pageText().slice(0, 200));
+
+stubFetch(() => ({ status: 500, body: JSON.stringify({ ok: false, detail: 'the config route exploded' }) }));
+mount(section.component);
+await settle();
+check('a JSON failure keeps the Host detail',
+  pageText().includes('the config route exploded'), pageText().slice(0, 200));
 
 // --- report ------------------------------------------------------------------
 const failed = results.filter(entry => !entry.ok);
